@@ -1,0 +1,5 @@
+{
+  "schedule": "*/30 * * * * *",
+  "backendUrl": "https://REPLACE-WITH-PUBLIC-BACKEND-URL",
+  "backpackApiUrl": "https://api.backpack.exchange"
+}

@@ -1,0 +1,37 @@
+{
+  "name": "@prox/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "migrate": "tsx src/db/migrate.ts",
+    "test": "vitest run",
+    "test:live": "LIVE=1 vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/jwt": "^10.2.2",
+    "@prox/core": "workspace:*",
+    "@solana/web3.js": "^1.99.0",
+    "bs58": "^6.0.0",
+    "decimal.js": "^10.6.0",
+    "fastify": "^5.12.5",
+    "pg": "^8.16.0",
+    "tsx": "^4.23.15",
+    "tweetnacl": "^1.0.3",
+    "viem": "^2.57.3",
+    "ws": "^8.22.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "@types/ws": "^8.18.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

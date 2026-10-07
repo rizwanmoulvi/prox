@@ -1,0 +1,13 @@
+{
+  "name": "prox",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.1.2",
+  "scripts": {
+    "test": "pnpm -r --if-present test",
+    "test:live": "pnpm -r --if-present test:live",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "dev:backend": "pnpm --filter @prox/backend dev",
+    "dev:frontend": "pnpm --filter @prox/frontend dev"
+  }
+}
