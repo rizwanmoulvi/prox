@@ -88,3 +88,39 @@ export const SESSION_LABEL: Record<string, string> = {
   WEEKEND: 'Weekend',
   HOLIDAY: 'Holiday',
 }
+
+const NEW_YORK = 'America/New_York'
+
+/** A clock time in New York, where the US market sessions are defined: "8:00 PM". */
+export function nyTime(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('en-US', { timeZone: NEW_YORK, hour: 'numeric', minute: '2-digit' })
+}
+
+/** The same instant on the viewer's own clock, or null when the viewer is in New York time. */
+export function localTime(iso: string | null | undefined): string | null {
+  if (!iso || Intl.DateTimeFormat().resolvedOptions().timeZone === NEW_YORK) return null
+  return new Date(iso).toLocaleString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
+/** "Thu, Oct 8" on the viewer's calendar. */
+export function dayLabel(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
+export const WINDOW_LABEL: Record<string, string> = {
+  OVERNIGHT: 'Overnight',
+  POST_MARKET: 'After hours',
+  PRE_MARKET: 'Pre-market',
+  CUSTOM: 'Custom hours',
+}
+
+export const RUN_LABEL: Record<string, string> = {
+  SCHEDULED: 'Scheduled',
+  SKIPPED: 'Skipped',
+  OPENING: 'Opening',
+  OPEN: 'Protecting',
+  DONE: 'Done',
+  FAILED: 'Failed',
+}

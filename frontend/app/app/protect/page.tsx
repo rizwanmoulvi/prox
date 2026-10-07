@@ -1,7 +1,8 @@
 'use client'
 
-// Three choices on the left (which stock, how much, how long) and what they amount to on the
-// right, worked out by the backend from the live account.
+// The choices on the left (which stocks, how much, when, for how many days) and what they amount
+// to on the right, worked out by the backend from the live account. Weekend cover is one hedge
+// held until Monday's open; every other choice becomes a schedule the backend runs on its own.
 
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -14,20 +15,20 @@ import { ScenarioTable } from '@/components/scenario-table'
 import { Button } from '@/components/ui/button'
 import { LineRow } from '@/components/umbra'
 import { WindowTrack } from '@/components/window-track'
-import { api, ApiError, type MarketRow, type Preview, type ProtectRequest } from '@/lib/api'
-import { basis, bpsPercent, money, percent } from '@/lib/format'
+import { api, ApiError, type MarketRow, type PlanPreview, type PlanRequest, type Preview } from '@/lib/api'
+import { bpsPercent, dayLabel, localTime, money, nyTime, percent } from '@/lib/format'
 
 const PRESETS = [2500, 5000, 7500, 10_000]
-// What the user picks. "4 hours" is a custom window that ends four hours after it was chosen.
-type Range = 'AFTER_HOURS' | 'FOUR_HOURS' | 'WEEKEND' | 'CUSTOM'
-const RANGES: { value: Range; label: string; hint: string }[] = [
-  { value: 'AFTER_HOURS', label: 'After hours', hint: 'Until the market opens' },
-  { value: 'FOUR_HOURS', label: '4 hours', hint: 'Starting now' },
-  { value: 'WEEKEND', label: 'Weekend', hint: 'Until Monday’s open' },
-  { value: 'CUSTOM', label: 'Custom', hint: 'Until a time you set' },
+type When = 'OVERNIGHT' | 'POST_MARKET' | 'PRE_MARKET' | 'WEEKEND' | 'CUSTOM'
+const WHENS: { value: When; label: string; hint: string }[] = [
+  { value: 'OVERNIGHT', label: 'Overnight', hint: '8 PM to 4 AM, New York' },
+  { value: 'POST_MARKET', label: 'After hours', hint: '4 PM to 8 PM, New York' },
+  { value: 'PRE_MARKET', label: 'Pre-market', hint: '4 AM to 9:30 AM, New York' },
+  { value: 'WEEKEND', label: 'Weekend', hint: 'Friday close to Monday open' },
+  { value: 'CUSTOM', label: 'Custom', hint: 'Hours you set' },
 ]
-const DAYS = [1, 3, 5] as const
-const fourHoursFromNow = () => new Date(Date.now() + 4 * 3_600_000).toISOString()
+const DAYS = [1, 5, 14, 30]
+type WeekendPreview = { symbol: string; preview: Preview } | { symbol: string; error: ApiError }
 
 export default function ProtectPage() {
   return (
@@ -41,140 +42,194 @@ function ProtectForm() {
   const router = useRouter()
   const params = useSearchParams()
   const markets = useQuery({ queryKey: ['markets'], queryFn: api.markets, refetchInterval: 30_000 })
-  const [symbol, setSymbol] = useState<string | null>(params.get('symbol'))
+  // Null until the user touches the list: then every stock that can be covered is selected.
+  const [picked, setPicked] = useState<string[] | null>(() => {
+    const fromUrl = [...(params.get('symbols') ?? '').split(','), params.get('symbol') ?? ''].filter(Boolean)
+    return fromUrl.length ? fromUrl : null
+  })
   const [bps, setBps] = useState(10_000)
-  const [range, setRange] = useState<Range>('AFTER_HOURS')
-  const [days, setDays] = useState<(typeof DAYS)[number]>(1)
-  const [customEndAt, setCustomEndAt] = useState('')
-  // Fixed when "4 hours" is picked, so the preview does not drift while the user reads it.
-  const [fourHourEnd, setFourHourEnd] = useState<string | null>(null)
-  const pickRange = (value: Range) => {
-    setRange(value)
-    if (value === 'FOUR_HOURS') setFourHourEnd(fourHoursFromNow())
-  }
+  const [when, setWhen] = useState<When>('OVERNIGHT')
+  const [days, setDays] = useState(1)
+  const [customStart, setCustomStart] = useState('20:00')
+  const [customEnd, setCustomEnd] = useState('04:00')
 
-  const rows = markets.data ?? []
-  const selected = rows.find((r) => r.symbol === symbol) ?? rows.find((r) => r.eligible) ?? rows[0]
+  const rows = useMemo(() => markets.data ?? [], [markets.data])
+  const coverable = useMemo(() => rows.filter((r) => r.eligible && r.presets.find((p) => p.bps === bps)?.available).map((r) => r.symbol), [rows, bps])
+  const selected = useMemo(() => (picked ?? coverable).filter((s) => coverable.includes(s)), [picked, coverable])
+  const toggle = (symbol: string) => setPicked(selected.includes(symbol) ? selected.filter((s) => s !== symbol) : [...selected, symbol])
 
-  const request = useMemo<ProtectRequest | null>(() => {
-    if (!selected) return null
-    const base = { stockSymbol: selected.symbol, protectionBps: bps }
-    if (range === 'AFTER_HOURS') return { ...base, mode: 'TONIGHT', days }
-    if (range === 'WEEKEND') return { ...base, mode: 'WEEKEND' }
-    if (range === 'FOUR_HOURS') return fourHourEnd ? { ...base, mode: 'CUSTOM', customEndAt: fourHourEnd } : null
-    return customEndAt ? { ...base, mode: 'CUSTOM', customEndAt: new Date(customEndAt).toISOString() } : null
-  }, [selected, bps, range, days, fourHourEnd, customEndAt])
+  const planRequest = useMemo<PlanRequest | null>(() => {
+    if (!selected.length || when === 'WEEKEND') return null
+    return { stockSymbols: selected, protectionBps: bps, window: when === 'CUSTOM' ? { kind: 'CUSTOM', customStart, customEnd } : { kind: when }, days }
+  }, [selected, bps, when, customStart, customEnd, days])
 
-  const preview = useQuery({
-    queryKey: ['preview', request],
-    queryFn: () => api.preview(request!),
-    enabled: !!request,
-    refetchInterval: 10_000,
+  const plan = useQuery({
+    queryKey: ['plan-preview', planRequest],
+    queryFn: () => api.planPreview(planRequest!),
+    enabled: !!planRequest,
+    refetchInterval: 15_000,
     retry: false,
-    // Keep the last figures on screen while a new choice loads, so the panel does not blink.
+    placeholderData: (previous) => previous,
+  })
+  const weekend = useQuery({
+    queryKey: ['weekend-preview', selected, bps],
+    queryFn: (): Promise<WeekendPreview[]> =>
+      Promise.all(
+        selected.map((symbol) =>
+          api
+            .preview({ stockSymbol: symbol, protectionBps: bps, mode: 'WEEKEND' })
+            .then((preview) => ({ symbol, preview }))
+            .catch((error: ApiError) => ({ symbol, error })),
+        ),
+      ),
+    enabled: when === 'WEEKEND' && selected.length > 0,
+    refetchInterval: 15_000,
+    retry: false,
     placeholderData: (previous) => previous,
   })
 
-  const activate = useMutation({
-    mutationFn: () => api.activate(request!),
-    onSuccess: (created) => {
-      if (created.policy.status === 'FAILED') toast.error('The hedge did not fill')
-      else toast.success('Protection activated')
-      router.push(`/app/protection/${created.policy.id}`)
+  const protect = useMutation({
+    mutationFn: async () => {
+      if (when !== 'WEEKEND') return { planId: (await api.createPlan(planRequest!)).plan.id }
+      const results = await Promise.all(
+        selected.map((symbol) =>
+          api
+            .activate({ stockSymbol: symbol, protectionBps: bps, mode: 'WEEKEND' })
+            .then((created) => ({ symbol, id: created.policy.id, failed: created.policy.status === 'FAILED' }))
+            .catch((error: Error) => ({ symbol, id: null, failed: true, error })),
+        ),
+      )
+      const failed = results.filter((r) => r.failed)
+      if (failed.length) toast.error(`${failed.map((f) => ticker(f.symbol)).join(', ')} could not be hedged`)
+      return { policyIds: results.filter((r) => r.id && !r.failed).map((r) => r.id!) }
+    },
+    onSuccess: (result) => {
+      if ('planId' in result) {
+        toast.success('Protection scheduled')
+        router.push(`/app/plans/${result.planId}`)
+        return
+      }
+      if (result.policyIds.length) toast.success('Weekend protection is on')
+      router.push(result.policyIds.length === 1 ? `/app/protection/${result.policyIds[0]}` : '/app')
     },
     onError: (error) => toast.error(error instanceof ApiError ? [error.message, ...error.blockers].join(' ') : (error as Error).message),
   })
 
   if (markets.isError) return <ErrorCard title="Could not load the stocks you can protect" message={(markets.error as Error).message} />
   if (!markets.data) return <Loader label="Finding stocks you can protect" />
-  if (!selected) return <ErrorCard title="Nothing to protect yet" message="This Backpack account holds no tokenized stock. Buy one on Backpack, then come back." />
+  if (!rows.length) return <ErrorCard title="Nothing to protect yet" message="This Backpack account holds no tokenized stock. Buy one on Backpack, then come back." />
 
-  const blocked = preview.error instanceof ApiError ? preview.error : null
-  const unavailable = selected.presets.filter((p) => !p.available)
+  const choose = (value: When) => {
+    setWhen(value)
+    if (value === 'WEEKEND') setDays(1)
+  }
 
   return (
     <div className="grid items-start gap-x-14 gap-y-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)]">
       <div className="flex flex-col gap-11">
         <header>
-          <h1 className="font-heading text-[clamp(2.2rem,6vw,3.2rem)] leading-[1.02] font-semibold tracking-[-0.6px]">Protect a stock</h1>
+          <h1 className="font-heading text-[clamp(2.2rem,6vw,3.2rem)] leading-[1.02] font-semibold tracking-[-0.6px]">Protect your stocks</h1>
           <p className="mt-3 max-w-[52ch] leading-relaxed text-ink-soft">
-            You keep the stock. ProX opens a short against it for the hours you choose, so a fall in the price is offset.
+            You keep the stocks. For the hours you choose, ProX holds a short against each of them, so a fall in the price is offset. Pick one stock or all of them; it is one click either way.
           </p>
         </header>
 
-        <Step number={1} title="Which stock" hint="Stocks this account holds that have a Backpack perpetual.">
+        <Step number={1} title="Which stocks" hint="Stocks this account holds that have a Backpack perpetual.">
           <div className="flex flex-wrap gap-2.5">
             {rows.map((row) => (
-              <StockOption key={row.symbol} row={row} selected={row.symbol === selected.symbol} onSelect={() => setSymbol(row.symbol)} />
+              <StockOption key={row.symbol} row={row} bps={bps} selected={selected.includes(row.symbol)} onSelect={() => toggle(row.symbol)} />
             ))}
           </div>
-        </Step>
-
-        <Step number={2} title="How much of it" hint="The share of the position the hedge offsets.">
-          <div className="grid grid-cols-4 gap-2.5">
-            {PRESETS.map((value) => {
-              const preset = selected.presets.find((p) => p.bps === value)
-              return (
-                <Choice key={value} selected={bps === value} disabled={!preset?.available} onSelect={() => setBps(value)} title={preset?.available ? undefined : presetReason(preset?.reason, selected)}>
-                  <span className="font-heading text-[1.5rem] leading-none font-medium">{bpsPercent(value)}</span>
-                </Choice>
-              )
-            })}
-          </div>
-          {unavailable.length > 0 && (
-            <p className="mt-3 text-sm leading-relaxed text-ink-soft">
-              {unavailable.map((p) => bpsPercent(p.bps)).join(', ')} {unavailable.length === 1 ? 'is' : 'are'} not possible for {selected.quantity} shares. The perp trades in steps of {selected.stepSize}, with a
-              minimum of {selected.minQuantity}.
-            </p>
+          {coverable.length > 1 && (
+            <div className="mt-3 flex gap-4 text-sm">
+              <button type="button" className="cursor-pointer font-bold text-gold-deep" onClick={() => setPicked(coverable)}>
+                Select all
+              </button>
+              <button type="button" className="cursor-pointer text-ink-soft" onClick={() => setPicked([])}>
+                Clear
+              </button>
+            </div>
           )}
         </Step>
 
-        <Step number={3} title="For how long" hint="When the window ends, the hedge closes once the perp and the cash price agree.">
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-            {RANGES.map((r) => (
-              <Choice key={r.value} selected={range === r.value} onSelect={() => pickRange(r.value)} align="start">
-                <span className="font-bold">{r.label}</span>
-                <span className="text-[0.8rem] font-normal opacity-75">{r.hint}</span>
+        <Step number={2} title="How much of each" hint="The share of each position the hedge offsets.">
+          <div className="grid grid-cols-4 gap-2.5">
+            {PRESETS.map((value) => (
+              <Choice key={value} selected={bps === value} onSelect={() => setBps(value)}>
+                <span className="font-heading text-[1.5rem] leading-none font-medium">{bpsPercent(value)}</span>
               </Choice>
             ))}
           </div>
-          {range === 'AFTER_HOURS' && (
-            <fieldset className="mt-5">
-              <legend className="text-sm text-ink-soft">Keep it on for</legend>
-              <div className="mt-2 grid max-w-sm grid-cols-3 gap-2.5">
-                {DAYS.map((d) => (
-                  <Choice key={d} selected={days === d} onSelect={() => setDays(d)}>
-                    <span className="font-bold">{d === 1 ? '1 day' : `${d} days`}</span>
-                  </Choice>
-                ))}
-              </div>
-              <p className="mt-3 text-sm leading-relaxed text-ink-soft">
-                {days === 1 ? 'The hedge comes off after the next market open.' : `One hedge, held through ${days} market opens, then closed after the last.`}
-              </p>
-            </fieldset>
-          )}
-          {range === 'CUSTOM' && (
-            <label className="mt-5 flex max-w-sm flex-col gap-2 text-sm text-ink-soft">
-              Protect until
-              <input
-                type="datetime-local"
-                value={customEndAt}
-                onChange={(e) => setCustomEndAt(e.target.value)}
-                className="rounded-lg bg-paper-2 px-[15px] py-[13px] text-base text-ink shadow-[inset_0_0_0_1.5px_var(--line)] outline-none focus:shadow-[inset_0_0_0_1.5px_var(--ink)]"
-              />
-            </label>
+        </Step>
+
+        <Step number={3} title="When" hint="The hours each day while the hedge is on. US market hours are set in New York.">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {WHENS.map((w) => (
+              <Choice key={w.value} selected={when === w.value} onSelect={() => choose(w.value)} align="start">
+                <span className="font-bold">{w.label}</span>
+                <span className="text-[0.8rem] font-normal opacity-75">{w.hint}</span>
+              </Choice>
+            ))}
+          </div>
+          {when === 'CUSTOM' && (
+            <div className="mt-5 grid max-w-sm grid-cols-2 gap-3">
+              <TimeField label="From, New York time" value={customStart} onChange={setCustomStart} />
+              <TimeField label="To, New York time" value={customEnd} onChange={setCustomEnd} />
+            </div>
           )}
         </Step>
+
+        {when !== 'WEEKEND' && (
+          <Step number={4} title="For how many days" hint="The hedge opens at the start of the hours and closes at the end, each day. Days the market is shut are skipped.">
+            <div className="flex flex-wrap gap-2.5">
+              {DAYS.map((d) => (
+                <Choice key={d} selected={days === d} onSelect={() => setDays(d)}>
+                  <span className="font-bold">{d === 1 ? 'Once' : `${d} days`}</span>
+                </Choice>
+              ))}
+              <label className="flex items-center gap-2 rounded-lg px-4 text-sm text-ink-soft shadow-[inset_0_0_0_1.5px_var(--line)]">
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  aria-label="Number of days"
+                  value={DAYS.includes(days) ? '' : days}
+                  placeholder="Other"
+                  onChange={(e) => {
+                    const n = Number(e.target.value)
+                    if (n >= 1) setDays(Math.min(60, Math.floor(n)))
+                  }}
+                  className="w-16 bg-transparent py-3 text-base text-ink outline-none"
+                />
+                days
+              </label>
+            </div>
+          </Step>
+        )}
       </div>
 
-      <Summary
-        preview={preview.data}
-        fetching={preview.isFetching}
-        waitingForChoice={!request}
-        blocked={blocked}
-        onActivate={() => activate.mutate()}
-        activating={activate.isPending}
-      />
+      {when === 'WEEKEND' ? (
+        <WeekendSummary
+          rows={rows}
+          selected={selected}
+          previews={weekend.data}
+          fetching={weekend.isFetching}
+          onProtect={() => protect.mutate()}
+          protecting={protect.isPending}
+        />
+      ) : (
+        <PlanSummary
+          rows={rows}
+          selected={selected}
+          when={when}
+          days={days}
+          preview={plan.data}
+          fetching={plan.isFetching}
+          error={plan.error instanceof ApiError ? plan.error : null}
+          onProtect={() => protect.mutate()}
+          protecting={protect.isPending}
+        />
+      )}
     </div>
   )
 }
@@ -213,111 +268,124 @@ function Choice({ selected, disabled, onSelect, title, align = 'center', childre
   )
 }
 
-function StockOption({ row, selected, onSelect }: { row: MarketRow; selected: boolean; onSelect: () => void }) {
+function StockOption({ row, bps, selected, onSelect }: { row: MarketRow; bps: number; selected: boolean; onSelect: () => void }) {
+  const preset = row.presets.find((p) => p.bps === bps)
+  const why = !row.eligible ? row.reasons.join(', ') : !preset?.available ? presetReason(preset?.reason, row) : null
   return (
-    <Choice selected={selected} onSelect={onSelect} align="start">
-      <span className="font-heading text-[1.35rem] leading-tight font-semibold">{row.symbol.replace(/\.US$/, '')}</span>
+    <Choice selected={selected} disabled={!!why} onSelect={onSelect} align="start" title={why ?? undefined}>
+      <span className="font-heading text-[1.35rem] leading-tight font-semibold">{ticker(row.symbol)}</span>
       <span className="text-[0.8rem] font-normal opacity-75">
         {row.quantity} shares, {money(row.marketValue)}
       </span>
-      {!row.eligible && <span className={`mt-1 text-[0.8rem] font-normal ${selected ? 'text-paper' : 'text-danger'}`}>{row.reasons.join(', ')}</span>}
+      {why && <span className="mt-1 text-[0.8rem] font-normal text-danger">{why}</span>}
     </Choice>
   )
 }
 
-function presetReason(reason: string | null | undefined, row: MarketRow): string {
-  if (reason === 'BELOW_MINIMUM') return `Below the perp minimum of ${row.minQuantity}`
-  if (reason === 'OFF_GRID') return `The perp trades in steps of ${row.stepSize}`
-  return reason ?? 'Unavailable'
+function TimeField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="flex flex-col gap-2 text-sm text-ink-soft">
+      {label}
+      <input
+        type="time"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-lg bg-paper-2 px-[15px] py-[13px] text-base text-ink shadow-[inset_0_0_0_1.5px_var(--line)] outline-none focus:shadow-[inset_0_0_0_1.5px_var(--ink)]"
+      />
+    </label>
+  )
 }
 
-function Summary({ preview, fetching, waitingForChoice, blocked, onActivate, activating }: { preview: Preview | undefined; fetching: boolean; waitingForChoice: boolean; blocked: ApiError | null; onActivate: () => void; activating: boolean }) {
-  const frame = 'rounded-xl bg-paper-2 p-6 shadow-[inset_0_0_0_1.5px_var(--line)] lg:sticky lg:top-6'
-  if (blocked) {
-    return (
-      <aside className={frame}>
-        <h2 className="font-heading text-[1.5rem] font-semibold tracking-[-0.3px]">This stock cannot be protected now</h2>
-        <ul className="mt-3 list-disc space-y-1.5 pl-5 leading-relaxed text-ink-soft">
-          {(blocked.blockers.length ? blocked.blockers : [blocked.message]).map((b) => (
-            <li key={b}>{b}</li>
-          ))}
-        </ul>
-      </aside>
-    )
-  }
-  if (!preview) {
-    return (
-      <aside className={frame}>
-        {waitingForChoice ? <p className="leading-relaxed text-ink-soft">Set an end time to see what this protection would do.</p> : <Loader compact label="Reading the account and the order book" />}
-      </aside>
-    )
-  }
+const FRAME = 'rounded-xl bg-paper-2 p-6 shadow-[inset_0_0_0_1.5px_var(--line)] lg:sticky lg:top-6'
 
-  const ticker = preview.stockSymbol.replace(/\.US$/, '')
-  const stockValue = Number(preview.stockValue)
-  const hedgeNotional = Number(preview.targetNotional)
-  const nothingToOpen = Number(preview.orderQuantity) <= 0
-  const canActivate = preview.canActivate && !nothingToOpen
-  const perpName = preview.perpSymbol.replace(/(\.US)?_USDC_PERP$/, '')
+function PlanSummary({
+  rows,
+  selected,
+  when,
+  days,
+  preview,
+  fetching,
+  error,
+  onProtect,
+  protecting,
+}: {
+  rows: MarketRow[]
+  selected: string[]
+  when: When
+  days: number
+  preview: PlanPreview | undefined
+  fetching: boolean
+  error: ApiError | null
+  onProtect: () => void
+  protecting: boolean
+}) {
+  if (!selected.length) return <aside className={FRAME}><p className="leading-relaxed text-ink-soft">Pick at least one stock to see what the protection would do.</p></aside>
+  if (error) return <Blocked title="This cannot be scheduled" reasons={error.blockers.length ? error.blockers : [error.message]} />
+  if (!preview) return <aside className={FRAME}><Loader compact label="Reading the account and the market calendar" /></aside>
+
+  const stockValue = rows.filter((r) => selected.includes(r.symbol)).reduce((sum, r) => sum + Number(r.marketValue), 0)
+  const protectedValue = Number(preview.totalNotionalPerRun)
+  const runs = preview.runs.filter((r) => !r.skipped)
+  const skipped = preview.runs.filter((r) => r.skipped)
+  const names = selected.length <= 3 ? selected.map(ticker).join(', ') : `${selected.length} stocks`
+  const label = WHENS.find((w) => w.value === when)!.label.toLowerCase()
 
   return (
-    <aside className={frame} aria-busy={fetching}>
-      <div className="flex items-baseline justify-between gap-4">
-        <h2 className="font-heading text-[2.2rem] leading-none font-semibold tracking-[-0.5px]">{ticker}</h2>
-        <span className="font-mono text-sm text-ink-soft">{money(preview.stockMarkPrice)} a share</span>
-      </div>
+    <aside className={FRAME} aria-busy={fetching}>
+      <h2 className="font-heading text-[2.2rem] leading-none font-semibold tracking-[-0.5px]">{names}</h2>
+      <p className="mt-2 text-sm text-ink-soft">
+        {label === 'custom' ? 'Custom hours' : label[0]!.toUpperCase() + label.slice(1)}, {days === 1 ? 'once' : `every day for ${days} days`}
+      </p>
 
       <dl className="mt-5 grid grid-cols-2 gap-4">
         <div>
-          <dt className="text-sm text-ink-soft">Protected</dt>
-          <dd className="font-heading text-[2.4rem] leading-tight font-medium tracking-[-0.6px]">{money(hedgeNotional)}</dd>
+          <dt className="text-sm text-ink-soft">Protected each time</dt>
+          <dd className="font-heading text-[2.4rem] leading-tight font-medium tracking-[-0.6px]">{money(protectedValue)}</dd>
         </div>
         <div>
           <dt className="text-sm text-ink-soft">Still exposed</dt>
-          <dd className="font-heading text-[2.4rem] leading-tight font-medium tracking-[-0.6px] text-ink-soft">{money(Math.max(0, Number(preview.netExposureAfter)))}</dd>
+          <dd className="font-heading text-[2.4rem] leading-tight font-medium tracking-[-0.6px] text-ink-soft">{money(Math.max(0, stockValue - protectedValue))}</dd>
         </div>
       </dl>
 
       <div className="mt-6 border-t border-line pt-5">
-        <WindowTrack endsAt={preview.reopenAt} hardStopAt={preview.maxEndAt} />
+        <p className="text-sm font-bold">{runs.length === 1 ? 'When it runs' : `${runs.length} times`}</p>
+        <ul className="mt-2">
+          {runs.slice(0, 7).map((r) => (
+            <LineRow
+              key={r.date}
+              label={dayLabel(r.startIso)}
+              value={`${nyTime(r.startIso)} to ${nyTime(r.endIso)} NY`}
+              sub={localTime(r.startIso) ? `${localTime(r.startIso)} to ${localTime(r.endIso)} your time` : undefined}
+            />
+          ))}
+        </ul>
+        {runs.length > 7 && <p className="mt-2 text-sm text-ink-soft">and {runs.length - 7} more</p>}
+        {skipped.length > 0 && <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-faint">Skipped, market shut: {skipped.map((r) => r.date).join(', ')}</p>}
+        {runs.some((r) => r.closeRule === 'CONVERGENCE') && (
+          <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-faint">Pre-market hedges close after the 9:30 open, once the perp and the stock price agree.</p>
+        )}
       </div>
 
       <div className="mt-6 border-t border-line pt-5">
-        <ScenarioTable ticker={ticker} stockValue={stockValue} hedgeNotional={hedgeNotional} />
-        <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-faint">Before costs. The round trip costs about {money(preview.costs.tradingFeeRoundTrip, true)} in fees, plus funding while the short is open.</p>
+        <ScenarioTable ticker={selected.length === 1 ? ticker(selected[0]!) : 'the stocks'} stockValue={stockValue} hedgeNotional={protectedValue} />
+        <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-faint">Before costs: trading fees each time the hedge opens and closes, and funding while it is open.</p>
       </div>
 
       <details className="group mt-5 border-t border-line pt-4">
         <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-bold text-ink-soft [&::-webkit-details-marker]:hidden">
-          How the hedge is built
+          Each stock
           <span className="font-mono text-ink-faint transition-transform duration-150 ease-out-strong group-open:rotate-45" aria-hidden>
             +
           </span>
         </summary>
         <div className="mt-2">
-          <LineRow label="Order" value={nothingToOpen ? 'None needed' : `Short ${preview.orderQuantity} ${perpName} perp`} />
-          {Number(preview.existingShortQuantity) > 0 && <LineRow label="Short already open" value={`${preview.existingShortQuantity} ${perpName}`} />}
-          <LineRow label="Leverage" value={preview.leverage ? `${preview.leverage}x` : 'n/a'} />
-          <LineRow label="Risk after opening" value={preview.projectedRisk ? <RiskBadge state={preview.projectedRisk} /> : 'n/a'} />
-          <LineRow label="Margin used after" value={percent(preview.projectedMmr)} />
-          <LineRow label="Free margin now" value={money(preview.account.netEquityAvailable)} />
-          <LineRow label="Counts as collateral" value={money(preview.collateralValue)} />
-          <LineRow label="Perp price, index" value={`${money(preview.perpMarkPrice)}, ${money(preview.perpIndexPrice)}`} />
-          <LineRow label="Gap between perp and stock" value={basis(((Number(preview.perpMarkPrice) - Number(preview.stockMarkPrice)) / Number(preview.stockMarkPrice)) * 10_000)} />
-          <LineRow label="Funding each hour" value={preview.costs.fundingRateHourly ? `${(Number(preview.costs.fundingRateHourly) * 100).toFixed(4)}%, changes` : 'changes'} />
+          {preview.stocks.map((s) => (
+            <LineRow key={s.symbol} label={ticker(s.symbol)} sub={s.issues.join(', ') || undefined} value={`${money(s.notional)} on ${s.quantity} shares`} />
+          ))}
         </div>
       </details>
 
-      {nothingToOpen && (
-        <p className="mt-5 border-l-2 border-gold pl-3 leading-relaxed text-ink-soft">
-          The account already holds a short of {preview.existingShortQuantity} {perpName}, which covers this level. There is nothing for ProX to open.
-        </p>
-      )}
-      {preview.safeProtectionBps < preview.requestedProtectionBps && (
-        <p className="mt-5 border-l-2 border-gold pl-3 leading-relaxed text-ink-soft">
-          Backpack allows {bpsPercent(preview.safeProtectionBps)} at most right now, an order of {preview.maxOrderQuantity}.
-        </p>
-      )}
       {preview.blockers.length > 0 && (
         <ul className="mt-5 space-y-1 border-l-2 border-danger pl-3 leading-relaxed text-danger">
           {preview.blockers.map((b) => (
@@ -326,14 +394,136 @@ function Summary({ preview, fetching, waitingForChoice, blocked, onActivate, act
         </ul>
       )}
 
-      <Button size="lg" className="mt-6 w-full" disabled={!canActivate || activating} onClick={onActivate}>
-        {activating ? 'Placing the hedge' : nothingToOpen ? 'Already covered' : `Protect ${money(hedgeNotional)} of ${ticker}`}
+      <Button size="lg" className="mt-6 w-full" disabled={!preview.canCreate || protecting} onClick={onProtect}>
+        {protecting ? 'Scheduling' : `Protect ${names}`}
       </Button>
-      {canActivate && (
+      {preview.canCreate && (
         <p className="mt-3 text-[0.8rem] leading-relaxed text-ink-faint">
-          This places a real order on Backpack: sell {preview.orderQuantity} {perpName} perp at {money(preview.orderLimitPrice)} or better, filled at once or not at all.
+          At the start of each window ProX places a real order on Backpack for every stock, and closes it at the end. Keep the backend running.
         </p>
       )}
     </aside>
   )
+}
+
+function WeekendSummary({
+  rows,
+  selected,
+  previews,
+  fetching,
+  onProtect,
+  protecting,
+}: {
+  rows: MarketRow[]
+  selected: string[]
+  previews: WeekendPreview[] | undefined
+  fetching: boolean
+  onProtect: () => void
+  protecting: boolean
+}) {
+  if (!selected.length) return <aside className={FRAME}><p className="leading-relaxed text-ink-soft">Pick at least one stock to see what the protection would do.</p></aside>
+  if (!previews) return <aside className={FRAME}><Loader compact label="Reading the account and the order book" /></aside>
+
+  const ok = previews.filter((p): p is { symbol: string; preview: Preview } => 'preview' in p)
+  const reasons = previews.flatMap((p) => ('error' in p ? [`${ticker(p.symbol)}: ${p.error.blockers.join(', ') || p.error.message}`] : p.preview.blockers.map((b) => `${ticker(p.symbol)}: ${b}`)))
+  const stockValue = rows.filter((r) => selected.includes(r.symbol)).reduce((sum, r) => sum + Number(r.marketValue), 0)
+  const protectedValue = ok.reduce((sum, p) => sum + Number(p.preview.targetNotional), 0)
+  const first = ok[0]?.preview
+  const single = ok.length === 1 ? first : undefined
+  const names = selected.length <= 3 ? selected.map(ticker).join(', ') : `${selected.length} stocks`
+  const canProtect = reasons.length === 0 && ok.length === selected.length && ok.every((p) => p.preview.canActivate && Number(p.preview.orderQuantity) > 0)
+
+  return (
+    <aside className={FRAME} aria-busy={fetching}>
+      <h2 className="font-heading text-[2.2rem] leading-none font-semibold tracking-[-0.5px]">{names}</h2>
+      <p className="mt-2 text-sm text-ink-soft">Over the weekend</p>
+
+      <dl className="mt-5 grid grid-cols-2 gap-4">
+        <div>
+          <dt className="text-sm text-ink-soft">Protected</dt>
+          <dd className="font-heading text-[2.4rem] leading-tight font-medium tracking-[-0.6px]">{money(protectedValue)}</dd>
+        </div>
+        <div>
+          <dt className="text-sm text-ink-soft">Still exposed</dt>
+          <dd className="font-heading text-[2.4rem] leading-tight font-medium tracking-[-0.6px] text-ink-soft">{money(Math.max(0, stockValue - protectedValue))}</dd>
+        </div>
+      </dl>
+
+      {first && (
+        <div className="mt-6 border-t border-line pt-5">
+          <WindowTrack endsAt={first.reopenAt} hardStopAt={first.maxEndAt} />
+        </div>
+      )}
+
+      <div className="mt-6 border-t border-line pt-5">
+        <ScenarioTable ticker={selected.length === 1 ? ticker(selected[0]!) : 'the stocks'} stockValue={stockValue} hedgeNotional={protectedValue} />
+        <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-faint">
+          Before costs. The round trip costs about {money(ok.reduce((sum, p) => sum + Number(p.preview.costs.tradingFeeRoundTrip), 0), true)} in fees, plus funding while the short is open.
+        </p>
+      </div>
+
+      {single && (
+        <details className="group mt-5 border-t border-line pt-4">
+          <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-bold text-ink-soft [&::-webkit-details-marker]:hidden">
+            How the hedge is built
+            <span className="font-mono text-ink-faint transition-transform duration-150 ease-out-strong group-open:rotate-45" aria-hidden>
+              +
+            </span>
+          </summary>
+          <div className="mt-2">
+            <LineRow label="Order" value={`Short ${single.orderQuantity} ${perpName(single.perpSymbol)} perp`} />
+            <LineRow label="Leverage" value={single.leverage ? `${single.leverage}x` : 'n/a'} />
+            <LineRow label="Risk after opening" value={single.projectedRisk ? <RiskBadge state={single.projectedRisk} /> : 'n/a'} />
+            <LineRow label="Margin used after" value={percent(single.projectedMmr)} />
+            <LineRow label="Free margin now" value={money(single.account.netEquityAvailable)} />
+            <LineRow label="Counts as collateral" value={money(single.collateralValue)} />
+          </div>
+        </details>
+      )}
+
+      {reasons.length > 0 && (
+        <ul className="mt-5 space-y-1 border-l-2 border-danger pl-3 leading-relaxed text-danger">
+          {reasons.map((b) => (
+            <li key={b}>{b}</li>
+          ))}
+        </ul>
+      )}
+
+      <Button size="lg" className="mt-6 w-full" disabled={!canProtect || protecting} onClick={onProtect}>
+        {protecting ? 'Placing the hedges' : `Protect ${money(protectedValue)} of ${names}`}
+      </Button>
+      {canProtect && (
+        <p className="mt-3 text-[0.8rem] leading-relaxed text-ink-faint">
+          This places real orders on Backpack now, one short per stock, filled at once or not at all. They close after Monday&apos;s open once the perp and the stock price agree.
+        </p>
+      )}
+    </aside>
+  )
+}
+
+function Blocked({ title, reasons }: { title: string; reasons: string[] }) {
+  return (
+    <aside className={FRAME}>
+      <h2 className="font-heading text-[1.5rem] font-semibold tracking-[-0.3px]">{title}</h2>
+      <ul className="mt-3 list-disc space-y-1.5 pl-5 leading-relaxed text-ink-soft">
+        {reasons.map((b) => (
+          <li key={b}>{b}</li>
+        ))}
+      </ul>
+    </aside>
+  )
+}
+
+function presetReason(reason: string | null | undefined, row: MarketRow): string {
+  if (reason === 'BELOW_MINIMUM') return `Too small for this level: the perp minimum is ${row.minQuantity}`
+  if (reason === 'OFF_GRID') return `Cannot be sized exactly: the perp trades in steps of ${row.stepSize}`
+  return reason ?? 'Unavailable'
+}
+
+function ticker(symbol: string): string {
+  return symbol.replace(/\.US$/, '')
+}
+
+function perpName(perpSymbol: string): string {
+  return perpSymbol.replace(/(\.US)?_USDC_PERP$/, '')
 }

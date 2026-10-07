@@ -45,6 +45,7 @@ import type { Receipt } from '../../backend/src/protection/receipt'
 import type { ProtectionPreview } from '../../backend/src/protection/protection.preview'
 import type { AccountHealth as BackendAccountHealth, Portfolio as BackendPortfolio, StockHolding } from '../../backend/src/portfolio/portfolio.service'
 import type { SessionSnapshot as BackendSessionSnapshot } from '../../backend/src/market/market-session.service'
+import type { PlanPreview as BackendPlanPreview, PlanRequest as BackendPlanRequest } from '../../backend/src/plans/plan.service'
 
 export type SessionSnapshot = Wire<BackendSessionSnapshot>
 export type AccountHealth = Wire<BackendAccountHealth>
@@ -57,6 +58,17 @@ export type Anchor = Wire<Db.Anchor>
 /** Live points from the stream carry no row id, so the chart type leaves it out. */
 export type PnlPoint = Omit<Wire<Db.PnlPoint>, 'id' | 'policyId'>
 export type Attestation = Wire<Db.Attestation>
+export type Plan = Wire<Db.Plan>
+export type PlanRun = Wire<Db.PlanRun>
+export type PlanRequest = BackendPlanRequest
+export type PlanPreview = Wire<BackendPlanPreview>
+export type WindowKind = Plan['windowKind']
+
+export interface PlanDetail {
+  plan: Plan
+  runs: PlanRun[]
+  policies: PolicyWithLeg[]
+}
 
 export interface PolicyWithLeg {
   policy: Policy
@@ -115,8 +127,6 @@ export interface ProtectRequest {
   protectionBps: number
   mode: ProtectionMode
   customEndAt?: string
-  /** TONIGHT only: how many market opens the hedge stays on through. */
-  days?: 1 | 3 | 5
 }
 
 export const api = {
@@ -136,5 +146,11 @@ export const api = {
   receipt: (id: string) => get<{ receipt: Receipt; anchors: Anchor[]; policy: Policy; leg: Leg }>(`/api/protection/${id}/receipt`),
   demoReopen: (policyId: string) => post<PolicyWithLeg>('/api/demo/reopen', { policyId }),
   attestations: () => get<Attestation[]>('/api/attestations'),
+  // Scheduled protection: several stocks, a recurring window, a number of days.
+  planPreview: (body: PlanRequest) => post<PlanPreview>('/api/plans/preview', body),
+  createPlan: (body: PlanRequest) => post<{ plan: Plan; runs: PlanRun[] }>('/api/plans', body),
+  plans: () => get<Plan[]>('/api/plans'),
+  plan: (id: string) => get<PlanDetail>(`/api/plans/${id}`),
+  cancelPlan: (id: string) => post<{ plan: Plan; runs: PlanRun[] }>(`/api/plans/${id}/cancel`),
   advanced: () => get<Record<string, unknown>>('/api/account/advanced'),
 }

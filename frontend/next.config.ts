@@ -10,6 +10,9 @@ const nextConfig: NextConfig = {
       { source: '/protect', destination: '/app/protect', permanent: false },
       { source: '/advanced', destination: '/app/advanced', permanent: false },
       { source: '/protection/:path*', destination: '/app/protection/:path*', permanent: false },
+      { source: '/plans/:path*', destination: '/app/plans/:path*', permanent: false },
+      { source: '/schedule', destination: '/app/protect', permanent: false },
+      { source: '/activity', destination: '/app', permanent: false },
     ]
   },
   turbopack: {

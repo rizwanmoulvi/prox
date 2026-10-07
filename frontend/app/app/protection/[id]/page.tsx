@@ -26,11 +26,19 @@ const CAN_CLOSE = new Set(['ACTIVE', 'PARTIAL', 'WAIT_REOPEN', 'WAIT_CONVERGENCE
 const CAN_DEMO = new Set(['ACTIVE', 'PARTIAL', 'WAIT_REOPEN'])
 
 // The four stages a protection passes through, and which statuses belong to each.
-const STAGES: { label: string; statuses: string[] }[] = [
+type Stage = { label: string; statuses: string[] }
+const STAGES: Stage[] = [
   { label: 'Hedge open', statuses: ['VALIDATING', 'READY', 'OPENING', 'ACTIVE', 'PARTIAL', 'REDUCING'] },
   { label: 'Waiting for the market', statuses: ['WAIT_REOPEN'] },
   { label: 'Waiting for prices to agree', statuses: ['WAIT_CONVERGENCE'] },
   { label: 'Closed', statuses: ['CLOSING', 'CLOSED', 'EXPIRED', 'EMERGENCY'] },
+]
+// A hedge with an end time (custom hours, a scheduled window) closes when its window ends,
+// without waiting for the market or for prices to agree.
+const WINDOW_STAGES: Stage[] = [
+  { label: 'Hedge open', statuses: ['VALIDATING', 'READY', 'OPENING', 'ACTIVE', 'PARTIAL', 'REDUCING', 'WAIT_REOPEN', 'WAIT_CONVERGENCE'] },
+  { label: 'Window ends', statuses: ['EXPIRED', 'CLOSING'] },
+  { label: 'Closed', statuses: ['CLOSED', 'EMERGENCY'] },
 ]
 
 export default function ProtectionPage() {
@@ -80,7 +88,9 @@ export default function ProtectionPage() {
   const costs = Number(live?.costs ?? Number(leg.fees) - Number(leg.funding))
   const net = underlyingPnl + hedgePnl - costs
   const failed = policy.status === 'FAILED'
-  const stage = STAGES.findIndex((s) => s.statuses.includes(policy.status))
+  const endsAtWindow = policy.closeRule === 'AT_END'
+  const stages = endsAtWindow ? WINDOW_STAGES : STAGES
+  const stage = stages.findIndex((s) => s.statuses.includes(policy.status))
   const done = policy.status === 'CLOSED'
 
   return (
@@ -103,7 +113,7 @@ export default function ProtectionPage() {
               View receipt
             </Button>
           )}
-          {appHealth.data?.demoMode && CAN_DEMO.has(policy.status) && (
+          {appHealth.data?.demoMode && CAN_DEMO.has(policy.status) && !endsAtWindow && (
             <Button variant="outline" disabled={demoReopen.isPending} onClick={() => demoReopen.mutate()} title="Demo mode: act as if the market had reopened">
               Treat market as open
             </Button>
@@ -133,16 +143,17 @@ export default function ProtectionPage() {
       )}
 
       {!failed && (
-        <ol className="grid gap-x-3 gap-y-4 sm:grid-cols-4" aria-label="Progress">
-          {STAGES.map((s, i) => {
+        <ol className={`grid gap-x-3 gap-y-4 ${endsAtWindow ? 'sm:grid-cols-3' : 'sm:grid-cols-4'}`} aria-label="Progress">
+          {stages.map((s, i) => {
             const reached = i <= stage
             const current = i === stage && !done
             return (
               <li key={s.label} aria-current={current ? 'step' : undefined}>
                 <span className={`block h-1.5 rounded-full ${reached ? (current ? 'bg-gold' : 'bg-ink') : 'bg-paper-3'}`} />
                 <span className={`mt-2 block text-sm ${current ? 'font-bold text-ink' : reached ? 'text-ink' : 'text-ink-faint'}`}>{s.label}</span>
-                {i === 2 && leg.convergenceCount > 0 && <span className="block text-[0.8rem] text-ink-soft">{leg.convergenceCount} checks passed in a row</span>}
-                {i === 1 && policy.status === 'WAIT_REOPEN' && <span className="block text-[0.8rem] text-ink-soft">Window ends {whenShort(policy.reopenAt)}</span>}
+                {!endsAtWindow && i === 2 && leg.convergenceCount > 0 && <span className="block text-[0.8rem] text-ink-soft">{leg.convergenceCount} checks passed in a row</span>}
+                {!endsAtWindow && i === 1 && policy.status === 'WAIT_REOPEN' && <span className="block text-[0.8rem] text-ink-soft">Window ends {whenShort(policy.reopenAt)}</span>}
+                {endsAtWindow && i === 1 && <span className="block text-[0.8rem] text-ink-soft">{whenShort(policy.reopenAt)}</span>}
               </li>
             )
           })}

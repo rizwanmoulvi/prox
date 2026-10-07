@@ -25,8 +25,9 @@ NEXT_PUBLIC_API_URL=http://localhost:4100 npx next dev -p 3200
 | Route | File | What it shows |
 |---|---|---|
 | `/` | `app/page.tsx` | The public landing page: the idea as a chart, a worked example, how it works, the safeguards |
-| `/app` | `app/app/page.tsx` | Portfolio value, how much is hedged, the stocks, the market session and margin |
-| `/app/protect` | `app/app/protect/page.tsx` | Three steps (stock, how much, how long) and a live summary with the Protect button |
+| `/app` | `app/app/page.tsx` | Portfolio value, how much is hedged, the stocks, running schedules, the market session and margin |
+| `/app/protect` | `app/app/protect/page.tsx` | Four steps (stocks, how much, when, how many days) and a live summary with the Protect button. Weekend is one hedge held until Monday's open; every other choice creates a schedule |
+| `/app/plans/[id]` | `app/app/plans/[id]/page.tsx` | A schedule: each day's window in New York and local time, the protection it opened per stock, and Stop |
 | `/app/protection/[id]` | `app/app/protection/[id]/page.tsx` | A live protection: the result, its stage, the chart, margin, and the record |
 | `/app/protection/[id]/receipt` | `app/app/protection/[id]/receipt/page.tsx` | The finished protection: result, statement, proof |
 | `/app/advanced` | `app/app/advanced/page.tsx` | The Backpack account as tables, backend and oracle state, raw JSON on request |

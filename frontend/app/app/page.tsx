@@ -11,8 +11,8 @@ import { MarginMeter } from '@/components/margin-meter'
 import { SessionCard } from '@/components/session-card'
 import { Button } from '@/components/ui/button'
 import { LineRow } from '@/components/umbra'
-import { api, type PolicyWithLeg } from '@/lib/api'
-import { bpsPercent, money, percent, STATUS_LABEL, when } from '@/lib/format'
+import { api, type Plan, type PolicyWithLeg } from '@/lib/api'
+import { bpsPercent, money, percent, STATUS_LABEL, when, WINDOW_LABEL } from '@/lib/format'
 import { shortQuantityFor } from '@/lib/hedge'
 
 const LIVE = new Set(['OPENING', 'ACTIVE', 'PARTIAL', 'WAIT_REOPEN', 'WAIT_CONVERGENCE', 'REDUCING', 'EMERGENCY', 'EXPIRED', 'CLOSING'])
@@ -21,12 +21,14 @@ export default function PortfolioPage() {
   const portfolio = useQuery({ queryKey: ['portfolio'], queryFn: api.portfolio, refetchInterval: 15_000 })
   const policies = useQuery({ queryKey: ['policies'], queryFn: api.policies, refetchInterval: 15_000 })
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 30_000 })
+  const plans = useQuery({ queryKey: ['plans'], queryFn: api.plans, refetchInterval: 15_000 })
 
   if (portfolio.isError) return <ErrorCard title="Could not read the Backpack account" message={(portfolio.error as Error).message} />
   if (!portfolio.data) return <Loader label="Reading the portfolio" />
 
   const account = portfolio.data.health
   const live = (policies.data ?? []).filter((p) => LIVE.has(p.policy.status))
+  const activePlans = (plans.data ?? []).filter((p) => p.status === 'ACTIVE')
   const rows = portfolio.data.holdings.map((holding) => {
     const policy = live.find((p) => p.leg.stockSymbol === holding.symbol)
     const value = Number(holding.marketValue)
@@ -34,7 +36,8 @@ export default function PortfolioPage() {
     // A short ProX opened is counted from its policy. Any other short on the perp still hedges
     // the stock, so it counts too, and is labelled as not managed here.
     const covered = policy ? value * (policy.policy.actualProtectionBps / 10_000) : Math.min(value, shortQuantity * Number(holding.markPrice))
-    return { holding, policy, value, shortQuantity, covered }
+    const plan = activePlans.find((p) => p.stockSymbols.includes(holding.symbol))
+    return { holding, policy, plan, value, shortQuantity, covered }
   })
   const stockValue = rows.reduce((sum, r) => sum + r.value, 0)
   const covered = rows.reduce((sum, r) => sum + r.covered, 0)
@@ -64,7 +67,7 @@ export default function PortfolioPage() {
             <h2 className="font-heading text-[1.6rem] font-semibold tracking-[-0.3px]">Stocks</h2>
             {rows.length > 0 && (
               <Link href="/app/protect" className="text-sm font-bold text-gold-deep">
-                Protect a stock
+                Protect stocks
               </Link>
             )}
           </div>
@@ -72,7 +75,7 @@ export default function PortfolioPage() {
             <p className="mt-4 max-w-md leading-relaxed text-ink-soft">This Backpack account holds no tokenized stock. Buy one on Backpack and it will appear here, ready to protect.</p>
           )}
           <ul className="mt-2">
-            {rows.map(({ holding, policy, shortQuantity, covered: rowCovered, value }) => {
+            {rows.map(({ holding, policy, plan, shortQuantity, covered: rowCovered, value }) => {
               const ticker = holding.symbol.replace(/\.US$/, '')
               return (
                 <li key={holding.symbol} className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-line-soft py-5 last:border-b-0">
@@ -100,6 +103,11 @@ export default function PortfolioPage() {
                         <p className="font-bold">{Math.round((rowCovered / Math.max(value, 1e-9)) * 100)}% hedged</p>
                         <p className="text-ink-soft">Short {shortQuantity} on Backpack</p>
                       </>
+                    ) : plan ? (
+                      <>
+                        <p className="font-bold">Scheduled</p>
+                        <p className="text-ink-soft">{scheduleLine(plan)}</p>
+                      </>
                     ) : (
                       <>
                         <p className="font-bold">Not protected</p>
@@ -122,6 +130,7 @@ export default function PortfolioPage() {
           </ul>
         </section>
 
+        <Schedules plans={plans.data ?? []} />
         <Protections policies={policies.data ?? []} />
       </div>
 
@@ -170,4 +179,36 @@ function Protections({ policies }: { policies: PolicyWithLeg[] }) {
       )}
     </section>
   )
+}
+
+function Schedules({ plans }: { plans: Plan[] }) {
+  if (!plans.length) return null
+  return (
+    <section>
+      <h2 className="font-heading text-[1.6rem] font-semibold tracking-[-0.3px]">Schedules</h2>
+      <ul className="mt-2">
+        {plans.slice(0, 6).map((plan) => (
+          <li key={plan.id}>
+            <Link
+              href={`/app/plans/${plan.id}`}
+              className="-mx-2 grid grid-cols-[auto_1fr_auto] items-center gap-x-4 rounded-md border-b border-line-soft px-2 py-3.5 text-ink no-underline transition-colors duration-150 hover:bg-ink/[0.04]"
+            >
+              <span className="font-bold">{plan.stockSymbols.map((s) => s.replace(/\.US$/, '')).join(', ')}</span>
+              <span className="text-sm text-ink-soft">
+                {bpsPercent(plan.protectionBps)}, {scheduleLine(plan)}
+              </span>
+              <span className={`text-sm font-bold ${plan.status === 'ACTIVE' ? 'text-gold-deep' : 'text-ink-soft'}`}>
+                {plan.status === 'ACTIVE' ? 'Running' : plan.status === 'CANCELLED' ? 'Stopped' : 'Finished'}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+function scheduleLine(plan: Plan): string {
+  const hours = plan.windowKind === 'CUSTOM' ? `${plan.customStart} to ${plan.customEnd} NY` : WINDOW_LABEL[plan.windowKind].toLowerCase()
+  return `${hours}, ${plan.days === 1 ? 'once' : `${plan.days} days`}`
 }
