@@ -1,0 +1,35 @@
+$ date -u
+Wed Oct  7 14:47:01 UTC 2026
+$ curl -s http://127.0.0.1:4000/api/cre/watchlist   # backend's live protections
+{"pairs":[{"stockSymbol":"NVDA.US","perpSymbol":"NVDA.US_USDC_PERP"},{"stockSymbol":"SPCX.US","perpSymbol":"SPCX.US_USDC_PERP"}]}
+$ cre workflow simulate convergence-oracle --non-interactive --trigger-index 0 --target staging-settings
+Initializing...
+Loading settings...
+Checking RPC connectivity...
+Compiling workflow...
+✓ Workflow compiled
+✓ Simulation limits enabled
+  HTTP: req=120kb resp=250kb timeout=10s | ConfHTTP: req=125kb resp=500kb timeout=1m30s | Consensus obs=25kb | ChainWrite evm_report=50kb evm_gas=10000000 solana_report=265b solana_cu=300000 | WASM binary=100mb compressed=20mb
+  Binary hash: c55d6d4a398615db0580a7a491b910b0356c8df9e0ecba34a23e3fdd13bc9e95
+  Config hash: a1312c2a33487708213eb0c2ecc0c38d5ede24da4dca67ced39d5485204ea861
+2026-10-07T22:47:06Z [SIMULATION] Simulator Initialized
+
+2026-10-07T22:47:06Z [SIMULATION] Running trigger trigger=cron-trigger@1.0.0
+
+✓ Workflow Simulation Result:
+{
+  "context": "",
+  "report": "",
+  "signatures": [],
+  "skipped": "no live protection to observe"
+}
+
+2026-10-07T22:47:07Z [SIMULATION] Execution finished signal received
+2026-10-07T22:47:07Z [SIMULATION] Skipping WorkflowEngineV2
+
+╭──────────────────────────────────────────────────────╮
+│ Simulation complete! Ready to deploy your workflow?  │
+│                                                      │
+│ Run cre account access to request deployment access. │
+╰──────────────────────────────────────────────────────╯
+exit code 0

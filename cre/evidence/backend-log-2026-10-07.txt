@@ -1,0 +1,32 @@
+# ProX backend logs, 2026-10-07 (UTC): the lines about the CRE oracle. Raw lines are pino JSON, shown flattened.
+
+## 14:45 to 14:47, production backend (EC2). NVDA and SPCX protected together at 2x; each `cre workflow simulate`
+## run reached the backend through an SSH tunnel to its local port. "observations": 2 = both stocks in one report.
+
+2026-10-07T14:45:09.818Z  account leverage raised for a group  {"from": "1", "to": "2"}
+2026-10-07T14:45:13.188Z  group activation                     {"planRunId": "aa8cd791-d435-4d74-918e-140df3d3d0f6", "stockSymbol": "NVDA.US", "leverageFloor": 2, "result": {"policyId": "b39c7b50-4518-4374-94bc-5c3c45ffdb43"}}
+2026-10-07T14:45:13.994Z  anchored on Solana                   {"policyId": "b39c7b50-4518-4374-94bc-5c3c45ffdb43", "kind": "OPENED", "signature": "5icuhL7myVWC2VbBuzRphNyRMG7CskwdgDwHxeE3zNjAdkjUQSq18n2shQPhELCvx8KjMQ6qE2VJsvtD33DmCLbq"}
+2026-10-07T14:45:15.218Z  group activation                     {"planRunId": "aa8cd791-d435-4d74-918e-140df3d3d0f6", "stockSymbol": "SPCX.US", "leverageFloor": 2, "result": {"policyId": "744e5b04-2791-4e8b-b129-3d7f78d644ed"}}
+2026-10-07T14:45:15.993Z  anchored on Solana                   {"policyId": "744e5b04-2791-4e8b-b129-3d7f78d644ed", "kind": "OPENED", "signature": "45fS7rianaohFB3sSTNKCJWejLsWgZrrBCzfZbQC6WafCBmWVfoEnVwhQBBX9kBU8q5CFmPCRMyR5PzjvEwAqTkN"}
+2026-10-07T14:45:39.550Z  CRE report accepted                  {"hash": "0xd86f4f5c660c900daf86605381202c3461031a798b818046df5da0628478b1a6", "mode": "SIMULATION", "observations": 2}
+2026-10-07T14:46:08.845Z  CRE report accepted                  {"hash": "0x790c96227894643a868ad009704f4546f3ce5761d8e452971c5acbdc866fd3a4", "mode": "SIMULATION", "observations": 2}
+2026-10-07T14:46:35.365Z  CRE report accepted                  {"hash": "0x44bba8f67fbaedd2a88e0630a19f97762124342fdc7d0c4c1ec9ed9ce0f4630e", "mode": "SIMULATION", "observations": 2}
+2026-10-07T14:46:36.857Z  CRE report accepted                  {"hash": "0x72f0ded69c1beb43900b6f289ccad09c3c8978a13242e444be13865915aba168", "mode": "SIMULATION", "observations": 2}
+2026-10-07T14:47:02.941Z  anchored on Solana                   {"policyId": "b39c7b50-4518-4374-94bc-5c3c45ffdb43", "kind": "RECEIPT", "signature": "33wkawcFPCX5o8fBLKkziBLMsfHwta8Biy3qVn4czbTnvZ7MwvtGezJdCGvunqgL91envcV8WX11CqKDqLDWPxHs"}
+2026-10-07T14:47:04.748Z  anchored on Solana                   {"policyId": "744e5b04-2791-4e8b-b129-3d7f78d644ed", "kind": "RECEIPT", "signature": "4BM3H4vAFd1HDpFgMhEjuRuoe3SBgqekTgyDsZK3MLei7Eb3iqUAqEta4gsW3qtKUuja6QVcGRQeRfe4yr8XEuhb"}
+
+## 12:22 to 12:25, the backend on the developer machine running the simulator itself every 30 s.
+## "report already received over HTTP": the workflow POSTed the report itself, so the copy in the CLI output was not ingested twice.
+
+2026-10-07T12:22:14.535Z  anchored on Solana                   {"policyId": "18c2f8e1-c613-4a3c-9c99-4bd098d73206", "kind": "OPENED", "signature": "2RXcEB85ATEwFjTdNhtePFacPB4bt9bfA6MVt2SN9biVHqVDHyPaSMZQQfcazkeGBpR11TNWaRWGvCpDXCos2VB5"}
+2026-10-07T12:22:47.408Z  CRE report accepted                  {"hash": "0x7c92cc4ba8754c2cd0508b6e011de1b3104a7c67d4fa47de9efcb84d5a0f8cc4", "mode": "SIMULATION", "observations": 1}
+2026-10-07T12:22:47.643Z  CRE simulation run                   {"ok": true, "detail": "report already received over HTTP"}
+2026-10-07T12:23:15.962Z  CRE report accepted                  {"hash": "0xdfd4c0129af6d13994cf9acdd54f5d73b61f8cbcfb8c7e3098206bdd6d7547ac", "mode": "SIMULATION", "observations": 1}
+2026-10-07T12:23:16.197Z  CRE simulation run                   {"ok": true, "detail": "report already received over HTTP"}
+2026-10-07T12:23:45.780Z  CRE report accepted                  {"hash": "0x15850b902883551071c8efdeef90d16d35373556cbe1843058c3b85a44558b35", "mode": "SIMULATION", "observations": 1}
+2026-10-07T12:23:46.016Z  CRE simulation run                   {"ok": true, "detail": "report already received over HTTP"}
+2026-10-07T12:24:15.830Z  CRE report accepted                  {"hash": "0x328c384a44fda7328e9806b7eff2dceb9fbfc456c17254450894e02298d80302", "mode": "SIMULATION", "observations": 1}
+2026-10-07T12:24:16.062Z  CRE simulation run                   {"ok": true, "detail": "report already received over HTTP"}
+2026-10-07T12:24:46.267Z  CRE report accepted                  {"hash": "0x416844cd2e87eee8478f49561657fc91cbb07105e7d9dcceea416e4d944822dc", "mode": "SIMULATION", "observations": 1}
+2026-10-07T12:24:46.506Z  CRE simulation run                   {"ok": true, "detail": "report already received over HTTP"}
+2026-10-07T12:25:07.364Z  anchored on Solana                   {"policyId": "18c2f8e1-c613-4a3c-9c99-4bd098d73206", "kind": "RECEIPT", "signature": "2qoUgUDEygHCP79Sj3ebUP54hLu1kLGQkpDM9e9HSp6n9iRzefFzs4R8mrkmoycQsqaHZeVG3AR3zk9QJcsSTj9s"}
