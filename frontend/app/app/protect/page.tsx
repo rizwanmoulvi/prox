@@ -16,17 +16,31 @@ import { Button } from '@/components/ui/button'
 import { LineRow } from '@/components/umbra'
 import { WindowTrack } from '@/components/window-track'
 import { api, ApiError, type MarketRow, type PlanPreview, type PlanRequest, type Preview } from '@/lib/api'
-import { bpsPercent, dayLabel, localTime, money, nyTime, percent } from '@/lib/format'
+import { bpsPercent, clock, dateOnly, dayLabel, localToNy, money, myZone, nyTime, nyWallClock, percent, zoneLabel } from '@/lib/format'
 
 const PRESETS = [2500, 5000, 7500, 10_000]
 type When = 'OVERNIGHT' | 'POST_MARKET' | 'PRE_MARKET' | 'WEEKEND' | 'CUSTOM'
-const WHENS: { value: When; label: string; hint: string }[] = [
-  { value: 'OVERNIGHT', label: 'Overnight', hint: '8 PM to 4 AM, New York' },
-  { value: 'POST_MARKET', label: 'After hours', hint: '4 PM to 8 PM, New York' },
-  { value: 'PRE_MARKET', label: 'Pre-market', hint: '4 AM to 9:30 AM, New York' },
-  { value: 'WEEKEND', label: 'Weekend', hint: 'Friday close to Monday open' },
-  { value: 'CUSTOM', label: 'Custom', hint: 'Hours you set' },
+// The market sessions are fixed in New York. Each choice shows them on the viewer's own clock
+// first, with New York underneath for reference.
+const WHENS: { value: When; label: string; yours: () => string; ny: string }[] = [
+  { value: 'OVERNIGHT', label: 'Overnight', yours: () => yourRange('20:00', '04:00', 1), ny: '8 PM to 4 AM in New York' },
+  { value: 'POST_MARKET', label: 'After hours', yours: () => yourRange('16:00', '20:00', 0), ny: '4 PM to 8 PM in New York' },
+  { value: 'PRE_MARKET', label: 'Pre-market', yours: () => yourRange('04:00', '09:30', 0), ny: '4 AM to 9:30 AM in New York' },
+  { value: 'WEEKEND', label: 'Weekend', yours: () => `Until Monday ${clock(nyWallClock('09:30'))}`, ny: 'Friday close to Monday open' },
+  { value: 'CUSTOM', label: 'Custom', yours: () => 'Any hours you choose', ny: 'Set in your own time' },
 ]
+
+function yourRange(nyStart: string, nyEnd: string, endDaysAhead: number): string {
+  return `${clock(nyWallClock(nyStart))} to ${clock(nyWallClock(nyEnd, endDaysAhead))}`
+}
+
+/** "HH:00" on the viewer's clock, `hours` from now. */
+function hourFromNow(hours: number): string {
+  const at = new Date(Date.now() + hours * 3_600_000)
+  return `${String(at.getHours()).padStart(2, '0')}:00`
+}
+
+const IN_NEW_YORK = () => myZone() === 'America/New_York'
 const DAYS = [1, 5, 14, 30]
 type WeekendPreview = { symbol: string; preview: Preview } | { symbol: string; error: ApiError }
 
@@ -50,8 +64,8 @@ function ProtectForm() {
   const [bps, setBps] = useState(10_000)
   const [when, setWhen] = useState<When>('OVERNIGHT')
   const [days, setDays] = useState(1)
-  const [customStart, setCustomStart] = useState('20:00')
-  const [customEnd, setCustomEnd] = useState('04:00')
+  const [customStart, setCustomStart] = useState(() => hourFromNow(1))
+  const [customEnd, setCustomEnd] = useState(() => hourFromNow(2))
 
   const rows = useMemo(() => markets.data ?? [], [markets.data])
   const coverable = useMemo(() => rows.filter((r) => r.eligible && r.presets.find((p) => p.bps === bps)?.available).map((r) => r.symbol), [rows, bps])
@@ -60,7 +74,8 @@ function ProtectForm() {
 
   const planRequest = useMemo<PlanRequest | null>(() => {
     if (!selected.length || when === 'WEEKEND') return null
-    return { stockSymbols: selected, protectionBps: bps, window: when === 'CUSTOM' ? { kind: 'CUSTOM', customStart, customEnd } : { kind: when }, days }
+    const window = when === 'CUSTOM' ? { kind: 'CUSTOM' as const, customStart, customEnd, timeZone: myZone() } : { kind: when }
+    return { stockSymbols: selected, protectionBps: bps, window, days }
   }, [selected, bps, when, customStart, customEnd, days])
 
   const plan = useQuery({
@@ -162,19 +177,26 @@ function ProtectForm() {
           </div>
         </Step>
 
-        <Step number={3} title="When" hint="The hours each day while the hedge is on. US market hours are set in New York.">
+        <Step number={3} title="When" hint={`The hours each day while the hedge is on, shown in your own time, ${zoneLabel()}.`}>
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {WHENS.map((w) => (
               <Choice key={w.value} selected={when === w.value} onSelect={() => choose(w.value)} align="start">
                 <span className="font-bold">{w.label}</span>
-                <span className="text-[0.8rem] font-normal opacity-75">{w.hint}</span>
+                <span className="text-[0.8rem] font-normal opacity-80">{w.yours()}</span>
+                {!IN_NEW_YORK() && <span className="text-[0.72rem] font-normal opacity-55">{w.ny}</span>}
               </Choice>
             ))}
           </div>
           {when === 'CUSTOM' && (
-            <div className="mt-5 grid max-w-sm grid-cols-2 gap-3">
-              <TimeField label="From, New York time" value={customStart} onChange={setCustomStart} />
-              <TimeField label="To, New York time" value={customEnd} onChange={setCustomEnd} />
+            <div className="mt-5 max-w-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <TimeField label="From" value={customStart} onChange={setCustomStart} />
+                <TimeField label="To" value={customEnd} onChange={setCustomEnd} />
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-ink-soft">
+                In your own time, {zoneLabel()}.{' '}
+                {!IN_NEW_YORK() && customStart && customEnd && `In New York that is ${localToNy(customStart)} to ${localToNy(customEnd)}.`}
+              </p>
             </div>
           )}
         </Step>
@@ -349,21 +371,23 @@ function PlanSummary({
       </dl>
 
       <div className="mt-6 border-t border-line pt-5">
-        <p className="text-sm font-bold">{runs.length === 1 ? 'When it runs' : `${runs.length} times`}</p>
+        <p className="text-sm font-bold">{runs.length === 1 ? 'When it runs' : `${runs.length} times`}, your time</p>
         <ul className="mt-2">
           {runs.slice(0, 7).map((r) => (
             <LineRow
               key={r.date}
               label={dayLabel(r.startIso)}
-              value={`${nyTime(r.startIso)} to ${nyTime(r.endIso)} NY`}
-              sub={localTime(r.startIso) ? `${localTime(r.startIso)} to ${localTime(r.endIso)} your time` : undefined}
+              value={`${clock(r.startIso)} to ${clock(r.endIso)}`}
+              sub={IN_NEW_YORK() ? undefined : `${nyTime(r.startIso)} to ${nyTime(r.endIso)} in New York`}
             />
           ))}
         </ul>
         {runs.length > 7 && <p className="mt-2 text-sm text-ink-soft">and {runs.length - 7} more</p>}
-        {skipped.length > 0 && <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-faint">Skipped, market shut: {skipped.map((r) => r.date).join(', ')}</p>}
+        {skipped.length > 0 && <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-faint">Skipped, the US market is shut: {skipped.map((r) => dateOnly(r.date)).join(', ')}</p>}
         {runs.some((r) => r.closeRule === 'CONVERGENCE') && (
-          <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-faint">Pre-market hedges close after the 9:30 open, once the perp and the stock price agree.</p>
+          <p className="mt-2 text-[0.8rem] leading-relaxed text-ink-faint">
+            Pre-market hedges close after the US market opens at {clock(nyWallClock('09:30'))} your time, once the perp and the stock price agree.
+          </p>
         )}
       </div>
 

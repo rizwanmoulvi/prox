@@ -1,7 +1,7 @@
 import { updateSql, type Db } from './db'
 import type { Plan, PlanRun, PlanRunStatus } from './types'
 
-type NewPlan = Pick<Plan, 'ownerWallet' | 'windowKind' | 'customStart' | 'customEnd' | 'protectionBps' | 'stockSymbols' | 'startDate' | 'days'>
+type NewPlan = Pick<Plan, 'ownerWallet' | 'windowKind' | 'customStart' | 'customEnd' | 'customTimeZone' | 'protectionBps' | 'stockSymbols' | 'startDate' | 'days'>
 type NewRun = Pick<PlanRun, 'runDate' | 'windowStart' | 'windowEnd' | 'closeRule' | 'status' | 'note'>
 
 export class PlanRepo {
@@ -10,9 +10,9 @@ export class PlanRepo {
   async create(plan: NewPlan, runs: NewRun[]): Promise<{ plan: Plan; runs: PlanRun[] }> {
     return this.db.tx(async (q) => {
       const created = await q.one<Plan>(
-        `INSERT INTO protection_plan (owner_wallet, status, window_kind, custom_start, custom_end, protection_bps, stock_symbols, start_date, days)
-         VALUES ($1, 'ACTIVE', $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-        [plan.ownerWallet, plan.windowKind, plan.customStart, plan.customEnd, plan.protectionBps, plan.stockSymbols, plan.startDate, plan.days],
+        `INSERT INTO protection_plan (owner_wallet, status, window_kind, custom_start, custom_end, custom_time_zone, protection_bps, stock_symbols, start_date, days)
+         VALUES ($1, 'ACTIVE', $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [plan.ownerWallet, plan.windowKind, plan.customStart, plan.customEnd, plan.customTimeZone, plan.protectionBps, plan.stockSymbols, plan.startDate, plan.days],
       )
       const createdRuns: PlanRun[] = []
       for (const run of runs) {

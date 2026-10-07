@@ -11,8 +11,8 @@ import { MarginMeter } from '@/components/margin-meter'
 import { SessionCard } from '@/components/session-card'
 import { Button } from '@/components/ui/button'
 import { LineRow } from '@/components/umbra'
-import { api, type Plan, type PolicyWithLeg } from '@/lib/api'
-import { bpsPercent, money, percent, STATUS_LABEL, when, WINDOW_LABEL } from '@/lib/format'
+import { api, type Plan, type PolicyWithLeg, type Portfolio } from '@/lib/api'
+import { bpsPercent, money, percent, scheduleHours, STATUS_LABEL, when } from '@/lib/format'
 import { shortQuantityFor } from '@/lib/hedge'
 
 const LIVE = new Set(['OPENING', 'ACTIVE', 'PARTIAL', 'WAIT_REOPEN', 'WAIT_CONVERGENCE', 'REDUCING', 'EMERGENCY', 'EXPIRED', 'CLOSING'])
@@ -40,6 +40,10 @@ export default function PortfolioPage() {
     return { holding, policy, plan, value, shortQuantity, covered }
   })
   const stockValue = rows.reduce((sum, r) => sum + r.value, 0)
+  const usdc = portfolio.data.collateral.collateral.find((c) => c.symbol === 'USDC')
+  // Market value of everything held. Backpack's own total weights each asset by how much it counts
+  // as collateral, which would show the stocks at a fraction of their price.
+  const portfolioValue = stockValue + portfolio.data.otherAssets.reduce((sum, a) => sum + Number(a.marketValue), 0)
   const covered = rows.reduce((sum, r) => sum + r.covered, 0)
   const unmanaged = rows.some((r) => !r.policy && r.shortQuantity > 0)
 
@@ -48,9 +52,9 @@ export default function PortfolioPage() {
       <div className="flex min-w-0 flex-col gap-12">
         <section>
           <p className="text-sm text-ink-soft">Portfolio value</p>
-          <p className="mt-1 font-heading text-[clamp(3.6rem,11vw,6rem)] leading-[0.95] font-medium tracking-[-1.5px]">{money(account.portfolioValue)}</p>
+          <p className="mt-1 font-heading text-[clamp(3.6rem,11vw,6rem)] leading-[0.95] font-medium tracking-[-1.5px]">{money(portfolioValue)}</p>
           <p className="mt-3 text-sm text-ink-soft">
-            {money(stockValue)} in stocks, {money(account.netEquityAvailable)} of free margin
+            {money(stockValue)} in stocks, {money(usdc?.balanceNotional ?? 0)} in USDC, {money(account.netEquityAvailable)} of free margin
           </p>
           <div className="mt-7 max-w-xl">
             <CoverageBar covered={covered} total={stockValue} managed={live.length > 0} />
@@ -130,6 +134,7 @@ export default function PortfolioPage() {
           </ul>
         </section>
 
+        <UsdcBalance usdc={usdc} />
         <Schedules plans={plans.data ?? []} />
         <Protections policies={policies.data ?? []} />
       </div>
@@ -209,6 +214,40 @@ function Schedules({ plans }: { plans: Plan[] }) {
 }
 
 function scheduleLine(plan: Plan): string {
-  const hours = plan.windowKind === 'CUSTOM' ? `${plan.customStart} to ${plan.customEnd} NY` : WINDOW_LABEL[plan.windowKind].toLowerCase()
+  const hours = plan.windowKind === 'CUSTOM' ? scheduleHours(plan) : scheduleHours(plan).toLowerCase()
   return `${hours}, ${plan.days === 1 ? 'once' : `${plan.days} days`}`
+}
+
+type CollateralRow = Portfolio['collateral']['collateral'][number]
+
+function UsdcBalance({ usdc }: { usdc: CollateralRow | undefined }) {
+  const total = Number(usdc?.totalQuantity ?? 0)
+  const available = Number(usdc?.availableQuantity ?? 0)
+  const onOrders = Number(usdc?.openOrderQuantity ?? 0)
+  const lent = Number(usdc?.lendQuantity ?? 0)
+  const parts = [available !== total && `${available} available`, onOrders > 0 && `${onOrders} on orders`, lent > 0 && `${lent} lent`].filter(Boolean)
+  return (
+    <section>
+      <h2 className="font-heading text-[1.6rem] font-semibold tracking-[-0.3px]">Balance</h2>
+      <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-line-soft py-5">
+        <span className="grid size-11 flex-none place-items-center rounded-full bg-paper-2 font-heading text-xl font-semibold shadow-[inset_0_0_0_1.5px_var(--line)]" aria-hidden>
+          $
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[1.05rem] font-bold">USDC</p>
+          <p className="text-sm text-ink-soft">Pays each hedge&apos;s fees and settles what the hedge gains or loses</p>
+        </div>
+        <div className="text-right">
+          <p className="font-mono text-[1.05rem]">{money(usdc?.balanceNotional ?? 0)}</p>
+          <p className="text-sm text-ink-soft">
+            {usdc ? `${usdc.totalQuantity} USDC` : 'No USDC'}
+            {parts.length ? `, ${parts.join(', ')}` : usdc ? ', all available' : ''}
+          </p>
+        </div>
+      </div>
+      <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-soft">
+        If it runs out, Backpack borrows USDC against your stocks to settle, and converts stock only as a last resort.
+      </p>
+    </section>
+  )
 }

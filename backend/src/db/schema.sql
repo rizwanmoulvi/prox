@@ -193,3 +193,6 @@ CREATE TABLE IF NOT EXISTS plan_run (
   UNIQUE (plan_id, run_date)
 );
 CREATE INDEX IF NOT EXISTS plan_run_due ON plan_run (status, window_start);
+
+-- Custom hours entered in the user's own clock; null means New York time.
+ALTER TABLE protection_plan ADD COLUMN IF NOT EXISTS custom_time_zone TEXT;

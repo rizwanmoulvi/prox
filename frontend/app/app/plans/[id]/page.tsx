@@ -12,7 +12,7 @@ import { Loader } from '@/components/loader'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { api, ApiError, type PolicyWithLeg } from '@/lib/api'
-import { bpsPercent, dayLabel, localTime, nyTime, RUN_LABEL, STATUS_LABEL, WINDOW_LABEL } from '@/lib/format'
+import { bpsPercent, clock, dateOnly, dayLabel, myZone, nyTime, RUN_LABEL, scheduleHours, STATUS_LABEL, zoneLabel } from '@/lib/format'
 
 const RUN_TONE: Record<string, string> = {
   OPEN: 'font-bold text-gold-deep',
@@ -49,7 +49,8 @@ export default function PlanPage() {
     byRun.set(key, [...(byRun.get(key) ?? []), item])
   }
   const names = plan.stockSymbols.map(ticker).join(', ')
-  const hours = plan.windowKind === 'CUSTOM' ? `${plan.customStart} to ${plan.customEnd} New York` : WINDOW_LABEL[plan.windowKind]
+  const hours = scheduleHours(plan)
+  const inNewYork = myZone() === 'America/New_York'
   const active = plan.status === 'ACTIVE'
 
   return (
@@ -75,19 +76,19 @@ export default function PlanPage() {
 
       <section>
         <h2 className="font-heading text-[1.6rem] font-semibold tracking-[-0.3px]">Day by day</h2>
-        <p className="mt-1 text-sm text-ink-soft">The hedge opens at the start of each window and closes at its end. Times in New York, with your own clock underneath.</p>
+        <p className="mt-1 text-sm text-ink-soft">The hedge opens at the start of each window and closes at its end. Times are in your own time, {zoneLabel()}.</p>
         <ul className="mt-4">
           {runs.map((run) => (
             <li key={run.id} className="border-b border-line-soft py-4 last:border-b-0">
               <div className="grid grid-cols-[7rem_1fr_auto] items-baseline gap-x-4 gap-y-1">
-                <span className="font-bold">{dayLabel(run.windowStart ?? `${run.runDate}T12:00:00Z`)}</span>
+                <span className="font-bold">{run.windowStart ? dayLabel(run.windowStart) : dateOnly(run.runDate)}</span>
                 <span className="text-sm text-ink-soft">
                   {run.windowStart ? (
                     <>
-                      {nyTime(run.windowStart)} to {nyTime(run.windowEnd)} NY
-                      {localTime(run.windowStart) && (
+                      {clock(run.windowStart)} to {clock(run.windowEnd)}
+                      {!inNewYork && (
                         <span className="block text-[0.8rem] text-ink-faint">
-                          {localTime(run.windowStart)} to {localTime(run.windowEnd)} your time
+                          {nyTime(run.windowStart)} to {nyTime(run.windowEnd)} in New York
                         </span>
                       )}
                       {run.closeRule === 'CONVERGENCE' && <span className="block text-[0.8rem] text-ink-faint">Closes after the open, once prices agree</span>}

@@ -3,7 +3,7 @@
 // for windows ending at the regular open, through the oracle.
 
 import Decimal from 'decimal.js'
-import { easternDate, planWindows, type PlannedWindow, type WindowSpec } from '@prox/core'
+import { addDays, dateInZone, easternDate, isTimeZone, planWindows, type PlannedWindow, type WindowSpec } from '@prox/core'
 import type { Context } from '../context'
 import type { PlanRepo } from '../db/plans'
 import { HEDGED_STATUSES, TERMINAL_STATUSES, type Plan, type PlanRun, type PolicyWithLeg } from '../db/types'
@@ -50,9 +50,19 @@ export class PlanService {
     if (request.window.kind === 'CUSTOM' && !(request.window.customStart && request.window.customEnd)) blockers.push('A custom window needs a start and an end time')
     if (!this.ctx.config.TRADING_ENABLED) blockers.push('Trading is switched off (TRADING_ENABLED=false)')
 
-    const startDate = request.startDate ?? easternDate(now)
+    // Custom hours may be in the user's own zone; the market sessions are always New York's.
+    const zone = request.window.kind === 'CUSTOM' ? request.window.timeZone : undefined
+    if (zone && !isTimeZone(zone)) blockers.push(`Unknown time zone: ${zone}`)
+    const window: WindowSpec = { ...request.window, timeZone: zone && isTimeZone(zone) ? zone : undefined }
+    let startDate = request.startDate ?? (window.timeZone ? dateInZone(now, window.timeZone) : easternDate(now))
     const { sessions, holidays } = await this.ctx.backpack.stocks.calendar()
-    const runs = planWindows(request.window, startDate, request.days, now, sessions, holidays).map((r) => ({
+    let planned = planWindows(window, startDate, request.days, now, sessions, holidays)
+    // Today's window is already over: the user means the next one, so count the days from tomorrow.
+    if (!request.startDate && planned[0]?.skipped === 'already over') {
+      startDate = addDays(startDate, 1)
+      planned = planWindows(window, startDate, request.days, now, sessions, holidays)
+    }
+    const runs = planned.map((r) => ({
       ...r,
       startIso: r.skipped ? null : new Date(r.startMs).toISOString(),
       endIso: r.skipped ? null : new Date(r.endMs).toISOString(),
@@ -76,6 +86,7 @@ export class PlanService {
         windowKind: request.window.kind,
         customStart: request.window.customStart ?? null,
         customEnd: request.window.customEnd ?? null,
+        customTimeZone: request.window.kind === 'CUSTOM' ? (request.window.timeZone ?? null) : null,
         protectionBps: request.protectionBps,
         stockSymbols: request.stockSymbols,
         startDate: preview.startDate,

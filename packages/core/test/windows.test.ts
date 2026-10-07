@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StockHoliday, StockSession } from '../src/session'
-import { addDays, fromEastern, planWindows } from '../src/windows'
+import { addDays, dateInZone, fromEastern, fromZone, isTimeZone, planWindows } from '../src/windows'
 
 const TZ = 'America/New_York'
 const sessions: StockSession[] = [
@@ -82,5 +82,43 @@ describe('planWindows', () => {
     expect(iso(runs[0]!.startMs)).toBe('2026-10-10T02:00:00.000Z')
     expect(iso(runs[0]!.endMs)).toBe('2026-10-10T06:00:00.000Z')
     expect(runs[0]!.closeRule).toBe('AT_END')
+  })
+})
+
+describe('custom windows in the viewer\'s own time zone', () => {
+  const monday = Date.parse('2026-10-05T12:00:00Z')
+
+  it('converts wall-clock times in any zone, on both sides of a clock change', () => {
+    expect(iso(fromZone('2026-10-07', '21:00', 'Asia/Kolkata'))).toBe('2026-10-07T15:30:00.000Z')
+    expect(iso(fromZone('2026-10-31', '09:00', 'America/Los_Angeles'))).toBe('2026-10-31T16:00:00.000Z')
+    expect(iso(fromZone('2026-11-01', '09:00', 'America/Los_Angeles'))).toBe('2026-11-01T17:00:00.000Z')
+    expect(iso(fromZone('2026-10-07', '20:00', 'America/New_York'))).toBe(iso(fromEastern('2026-10-07', '20:00')))
+  })
+
+  it('knows the calendar date in a zone', () => {
+    expect(dateInZone(Date.parse('2026-10-07T20:00:00Z'), 'Asia/Kolkata')).toBe('2026-10-08')
+    expect(dateInZone(Date.parse('2026-10-07T20:00:00Z'), 'America/New_York')).toBe('2026-10-07')
+  })
+
+  it('tells a real zone from a made-up one', () => {
+    expect(isTimeZone('Asia/Singapore')).toBe(true)
+    expect(isTimeZone('Mars/Olympus')).toBe(false)
+  })
+
+  it('keeps a local window at the same local time when New York changes its clocks', () => {
+    const runs = planWindows({ kind: 'CUSTOM', customStart: '21:00', customEnd: '22:00', timeZone: 'Asia/Kolkata' }, '2026-10-30', 4, monday, sessions, holidays)
+    expect(runs.map((r) => iso(r.startMs))).toEqual([
+      '2026-10-30T15:30:00.000Z',
+      '2026-10-31T15:30:00.000Z',
+      '2026-11-01T15:30:00.000Z',
+      '2026-11-02T15:30:00.000Z',
+    ])
+    expect(runs.every((r) => r.endMs - r.startMs === 3_600_000 && r.closeRule === 'AT_END')).toBe(true)
+  })
+
+  it('rolls a local window past midnight to the next local day', () => {
+    const runs = planWindows({ kind: 'CUSTOM', customStart: '23:30', customEnd: '00:15', timeZone: 'Asia/Singapore' }, '2026-10-08', 1, monday, sessions, holidays)
+    expect(iso(runs[0]!.startMs)).toBe('2026-10-08T15:30:00.000Z')
+    expect(iso(runs[0]!.endMs)).toBe('2026-10-08T16:15:00.000Z')
   })
 })

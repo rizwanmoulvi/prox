@@ -17,7 +17,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+    // Only a request with a body is JSON. Fastify rejects an empty body sent as JSON, which is
+    // what the bodyless POSTs (stop a schedule, close a hedge, sign out) used to do.
+    headers: { ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(init.headers ?? {}) },
   })
   const text = await response.text()
   const body = text ? (JSON.parse(text) as Record<string, unknown>) : null

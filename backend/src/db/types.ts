@@ -68,6 +68,8 @@ export interface Plan {
   windowKind: 'PRE_MARKET' | 'POST_MARKET' | 'OVERNIGHT' | 'CUSTOM'
   customStart: string | null
   customEnd: string | null
+  /** IANA zone of customStart and customEnd. Null means New York time. */
+  customTimeZone: string | null
   protectionBps: number
   stockSymbols: string[]
   startDate: string

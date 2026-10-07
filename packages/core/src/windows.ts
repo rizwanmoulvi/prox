@@ -7,9 +7,11 @@ export type WindowKind = 'PRE_MARKET' | 'POST_MARKET' | 'OVERNIGHT' | 'CUSTOM'
 
 export interface WindowSpec {
   kind: WindowKind
-  /** ET clock times, HH:MM, for CUSTOM only. An end at or before the start means the next day. */
+  /** Clock times, HH:MM, for CUSTOM only. An end at or before the start means the next day. */
   customStart?: string
   customEnd?: string
+  /** IANA zone the custom times are in, such as Asia/Kolkata. New York time when absent. */
+  timeZone?: string
 }
 
 export interface PlannedWindow {
@@ -73,6 +75,34 @@ export function fromEastern(date: string, time: string): number {
   return wall - offsetAt(guess) * HOUR_MS
 }
 
+/**
+ * UTC instant of a wall-clock time in any IANA zone, DST aware. Uses Intl, so it is for the
+ * backend only; the CRE workflow never plans windows.
+ */
+export function fromZone(date: string, time: string, timeZone: string): number {
+  const [y, m, d] = date.split('-').map(Number)
+  const [hh, mm, ss = 0] = time.split(':').map(Number)
+  const wall = Date.UTC(y!, m! - 1, d!, hh!, mm!, ss)
+  // Correct twice: near a clock change the offset at the first guess can differ from the answer's.
+  const first = wall - zoneOffsetMs(wall, timeZone)
+  return wall - zoneOffsetMs(first, timeZone)
+}
+
+/** The calendar date, YYYY-MM-DD, at an instant in an IANA zone. */
+export function dateInZone(utcMs: number, timeZone: string): string {
+  const p = zoneParts(utcMs, timeZone)
+  return `${p.year}-${p.month}-${p.day}`
+}
+
+export function isTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function addDays(date: string, days: number): string {
   const [y, m, d] = date.split('-').map(Number)
   const t = new Date(Date.UTC(y!, m! - 1, d! + days))
@@ -103,9 +133,10 @@ function sessionWindow(kind: Exclude<WindowKind, 'CUSTOM'>, date: string, sessio
 
 function customWindow(spec: WindowSpec, date: string): PlannedWindow | null {
   if (!spec.customStart || !spec.customEnd) return null
-  const startMs = fromEastern(date, spec.customStart)
-  let endMs = fromEastern(date, spec.customEnd)
-  if (endMs <= startMs) endMs = fromEastern(addDays(date, 1), spec.customEnd)
+  const at = (day: string, time: string) => (spec.timeZone ? fromZone(day, time, spec.timeZone) : fromEastern(day, time))
+  const startMs = at(date, spec.customStart)
+  let endMs = at(date, spec.customEnd)
+  if (endMs <= startMs) endMs = at(addDays(date, 1), spec.customEnd)
   return { date, startMs, endMs, closeRule: 'AT_END' }
 }
 
@@ -145,6 +176,27 @@ function offsetAt(utcMs: number): number {
   const wallMs = Date.UTC(et.year, et.month - 1, et.day) + et.secondOfDay * 1000
   const utcWallMs = Date.UTC(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate(), utc.getUTCHours(), utc.getUTCMinutes(), utc.getUTCSeconds())
   return Math.round((wallMs - utcWallMs) / HOUR_MS)
+}
+
+/** How far the zone's clock is ahead of UTC at an instant, in ms. */
+function zoneOffsetMs(utcMs: number, timeZone: string): number {
+  const p = zoneParts(utcMs, timeZone)
+  const asUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute), Number(p.second))
+  return asUtc - Math.floor(utcMs / 1000) * 1000
+}
+
+function zoneParts(utcMs: number, timeZone: string): Record<string, string> {
+  const format = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+  return Object.fromEntries(format.formatToParts(utcMs).map((part) => [part.type, part.value]))
 }
 
 function pad2(n: number): string {

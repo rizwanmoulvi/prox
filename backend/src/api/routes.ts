@@ -32,6 +32,8 @@ const PlanBody = z.object({
     kind: z.enum(['PRE_MARKET', 'POST_MARKET', 'OVERNIGHT', 'CUSTOM']),
     customStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
     customEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+    /** IANA zone the custom times are in. Absent means New York time. */
+    timeZone: z.string().min(1).max(64).optional(),
   }),
   days: z.number().int().min(1).max(60),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
