@@ -294,7 +294,10 @@ export class ProtectionService {
     const account = await this.ctx.backpack.account.get()
     if (new Decimal(account.leverageLimit).lt(group.leverage)) {
       await this.ctx.backpack.account.setLeverageLimit(String(group.leverage))
-      this.ctx.log.info({ from: account.leverageLimit, to: group.leverage }, 'account leverage raised for a group')
+      // Without the raise only the first stocks would fit, leaving half a hedge.
+      const after = await this.ctx.backpack.account.get()
+      if (new Decimal(after.leverageLimit).lt(group.leverage)) throw new Error(`Backpack kept the account at ${after.leverageLimit}x after a request for ${group.leverage}x`)
+      this.ctx.log.info({ from: account.leverageLimit, to: after.leverageLimit }, 'account leverage raised for a group')
     }
     return group.leverage
   }
