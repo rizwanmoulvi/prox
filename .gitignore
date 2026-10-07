@@ -12,3 +12,4 @@ coverage/
 *.tsbuildinfo
 cre/**/.cre_build_tmp*
 cre/**/*.wasm
+.vercel/

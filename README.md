@@ -11,7 +11,8 @@ The product spec is in `docs/prd.md`.
 | `packages/core` | Pure logic shared by the backend and the oracle: US equity session engine, basis maths, report codec |
 | `backend` | Fastify API, Backpack adapter (REST + WebSocket), protection state machine, risk engine, workers, CRE report ingest, Solana anchoring |
 | `cre` | Chainlink CRE project with the `convergence-oracle` workflow |
-| `frontend` | Next.js app: home, protect (one-off and scheduled), activity, protection screen, report, details |
+| `frontend` | Next.js app: the landing page at `/`, and under `/app` the portfolio, protect, schedules, live protection, receipt and advanced pages |
+| `deploy` | The Caddy and systemd files the server runs |
 
 ## Getting started
 
@@ -65,3 +66,36 @@ Until Chainlink grants deploy access (`cre account access`), the backend runs th
 - One live protection per stock, caps on position and total notional, an allowlist of stock symbols.
 - Every order is written to the database before it is sent, with a deterministic `clientId`; unknown outcomes are reconciled, never resent blindly.
 - Risk actions run on Backpack's maintenance margin rate from the backend's own data, never from the oracle.
+
+## Deployment
+
+The backend runs on an EC2 instance (Ubuntu) and the frontend on Vercel. The browser only talks to the Vercel site: Next.js forwards `/api/*` to the backend (`BACKEND_ORIGIN`), so the sign-in cookie stays first-party.
+
+### Backend on EC2
+
+Caddy terminates HTTPS on `<public-ip-with-dashes>.sslip.io` (a name that resolves to the IP, so no domain is needed) and forwards to the backend on `127.0.0.1:4000`. Ports 80 and 443 must be open. The backend runs under systemd and restarts on failure and on boot.
+
+First time, as `ubuntu`, with Node 24, pnpm, PostgreSQL and Caddy installed:
+
+```bash
+git clone https://github.com/rizwanmoulvi/prox.git ~/prox && cd ~/prox
+pnpm install --frozen-lockfile --filter "@prox/backend..."
+# backend/.env: as in backend/.env.example, with DATABASE_URL pointing at the server's Postgres
+# and FRONTEND_ORIGIN set to the Vercel address
+sudo cp deploy/prox-backend.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now prox-backend
+sed 's/{$PROX_HOST}/<public-ip-with-dashes>.sslip.io/' deploy/Caddyfile | sudo tee /etc/caddy/Caddyfile && sudo systemctl reload caddy
+```
+
+To update: `cd ~/prox && git pull && pnpm install --frozen-lockfile --filter "@prox/backend..." && sudo systemctl restart prox-backend`. Logs: `journalctl -u prox-backend -f`.
+
+The CRE oracle is off on the server until it has a CRE API key: create one at app.chain.link, set `CRE_API_KEY` for the service, install `bun` and the `cre` CLI, run `bun install` in `cre/convergence-oracle`, and set `CRE_PROJECT_DIR` in `backend/.env`. Until then, protections that close after the market opens (pre-market, weekend) close at their time limit instead.
+
+### Frontend on Vercel
+
+The frontend imports type definitions from the backend source, so it is built on a machine with the whole repository and uploaded prebuilt. From the repository root, with the Vercel CLI logged in and the project linked (root directory `frontend`, `BACKEND_ORIGIN` set for Production):
+
+```bash
+vercel pull --yes --environment=production
+vercel build --prod
+vercel deploy --prebuilt --prod
+```

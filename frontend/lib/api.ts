@@ -1,6 +1,7 @@
 // Typed calls to the ProX backend. Cookies carry the session, so every call sends credentials.
 
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'
+// Every call goes to this site's own /api, which next.config.ts forwards to the backend.
+export const API_URL = ''
 
 export class ApiError extends Error {
   constructor(

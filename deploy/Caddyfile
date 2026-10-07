@@ -1,0 +1,16 @@
+# HTTPS in front of the backend. PROX_HOST is the public name, for example
+# 16-171-193-212.sslip.io (sslip.io resolves to the IP inside the name, so no domain is needed).
+# Caddy gets and renews the certificate from Let's Encrypt; ports 80 and 443 must be open.
+
+{$PROX_HOST} {
+	# The CRE simulator delivers reports to 127.0.0.1:4000 directly, never through here. The
+	# backend trusts loopback for those reports, and behind this proxy every caller looks like
+	# loopback, so the route is closed at the edge. Remove this block when CRE_REPORT_MODE=don.
+	@ingest path /api/cre/reports
+	respond @ingest 403
+
+	reverse_proxy 127.0.0.1:4000 {
+		# Let the live updates on /api/stream through as they happen.
+		flush_interval -1
+	}
+}
