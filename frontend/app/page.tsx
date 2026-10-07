@@ -1,179 +1,123 @@
-'use client'
-
-// Home: what you hold, what is covered, one button to protect.
-
-import { useQuery } from '@tanstack/react-query'
+import type { Metadata } from 'next'
 import Link from 'next/link'
-import { useState } from 'react'
-import { ErrorCard } from '@/components/error-card'
+import { GapChart } from '@/components/landing/gap-chart'
+import { LiveSession } from '@/components/landing/live-session'
+import { TryIt } from '@/components/landing/try-it'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import { api, type Plan, type PolicyWithLeg } from '@/lib/api'
-import { money } from '@/lib/format'
-import { etAndLocal, plainStatus, ticker, TONE_CLASS, WHEN_OPTIONS } from '@/lib/plain'
 
-const LIVE = new Set(['OPENING', 'ACTIVE', 'PARTIAL', 'WAIT_REOPEN', 'WAIT_CONVERGENCE', 'REDUCING', 'EMERGENCY', 'EXPIRED', 'CLOSING'])
+export const metadata: Metadata = {
+  title: 'ProX: protection for tokenized stocks while the market is closed',
+  description: 'Hold your tokenized stock and hedge it for the hours the market is shut. ProX opens the hedge, watches it, and closes it once prices agree again.',
+}
 
-export default function HomePage() {
-  const portfolio = useQuery({ queryKey: ['portfolio'], queryFn: api.portfolio, refetchInterval: 15_000 })
-  const policies = useQuery({ queryKey: ['policies'], queryFn: api.policies, refetchInterval: 15_000 })
-  const plans = useQuery({ queryKey: ['plans'], queryFn: api.plans, refetchInterval: 15_000 })
-  const markets = useQuery({ queryKey: ['markets'], queryFn: api.markets, refetchInterval: 30_000 })
-  const [selected, setSelected] = useState<string[]>([])
+const STEPS = [
+  {
+    title: 'Choose what to protect',
+    body: 'Pick a stock you hold on Backpack, how much of it to cover, and for how long: after hours, four hours, the weekend, or a time you set.',
+  },
+  {
+    title: 'ProX opens a matching short',
+    body: 'It sells the same stock’s perpetual on Backpack. Your stock stays where it is and serves as the collateral, so nothing is sold and no extra cash is needed.',
+  },
+  {
+    title: 'It closes itself',
+    body: 'When the window ends, an oracle on Chainlink compares the perpetual with the cash market. Once they agree several times in a row, the short is bought back and you get a receipt.',
+  },
+]
 
-  if (portfolio.isError) return <ErrorCard title="Could not read your account" message={(portfolio.error as Error).message} />
-  if (!portfolio.data) return <Skeleton className="h-64 w-full" />
+const SAFEGUARDS = [
+  { title: 'The close can only reduce', body: 'The order that ends a hedge can shrink the short. It cannot turn it into a long position.' },
+  { title: 'Margin is watched', body: 'Every few seconds ProX reads your margin from Backpack. If it tightens, the hedge is cut back and then closed, well before liquidation.' },
+  { title: 'Prices are checked twice', body: 'The oracle’s readings must match what ProX sees itself. A reading that disagrees does not count.' },
+  { title: 'Every result leaves a mark', body: 'The hash of each receipt is written to Solana, so the record can be checked against the chain later.' },
+]
 
-  const live = (policies.data ?? []).filter((p) => LIVE.has(p.policy.status))
-  const activePlans = (plans.data ?? []).filter((p) => p.status === 'ACTIVE')
-  const holdings = portfolio.data.holdings
-  const stockValue = holdings.reduce((sum, h) => sum + Number(h.marketValue), 0)
-  const coveredValue = live.reduce((sum, p) => sum + Number(p.leg.stockMarketValue) * (p.policy.actualProtectionBps / 10_000), 0)
-  const usdc = portfolio.data.otherAssets.find((a) => a.symbol === 'USDC')
-  const eligible = new Set((markets.data ?? []).filter((m) => m.eligible).map((m) => m.symbol))
-  const toggle = (s: string) => setSelected((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]))
-  const chosen = selected.filter((s) => eligible.has(s))
-
+export default function LandingPage() {
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-10">
-      <section className="grid gap-6 sm:grid-cols-3">
-        <Big label="Your stocks" value={money(stockValue)} />
-        <Big label="Covered right now" value={money(coveredValue)} tone={coveredValue > 0 ? 'good' : undefined} />
-        <Big label="Protection balance" value={money(usdc?.quantity ?? 0)} hint="USDC that settles the cost" />
-      </section>
+    <div className="mx-auto w-full max-w-[1240px] px-5 sm:px-8">
+      <header className="flex items-center justify-between gap-4 py-5">
+        <span className="font-heading text-[1.5rem] font-semibold tracking-[0.2px]">ProX</span>
+        <Button nativeButton={false} render={<Link href="/app" />} variant="secondary" className="rounded-full">
+          Open the app
+        </Button>
+      </header>
 
-      <section className="flex flex-col gap-3">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-lg font-semibold">Stocks</h2>
-          <span className="text-sm text-muted-foreground">Tap to choose what to protect</span>
-        </div>
-        {holdings.length === 0 && <p className="text-sm text-muted-foreground">No tokenized stocks in the account yet.</p>}
-        <ul className="divide-y rounded-xl border">
-          {holdings.map((h) => {
-            const cover = live.find((p) => p.leg.stockSymbol === h.symbol)
-            const planned = activePlans.find((p) => p.stockSymbols.includes(h.symbol))
-            const canPick = eligible.has(h.symbol) && !cover
-            const picked = selected.includes(h.symbol)
-            return (
-              <li key={h.symbol} className={`flex items-center gap-4 px-4 py-4 ${picked ? 'bg-muted' : ''}`}>
-                <button onClick={() => canPick && toggle(h.symbol)} disabled={!canPick} className="flex min-w-0 flex-1 items-center gap-4 text-left disabled:cursor-default">
-                  <span className={`flex size-6 shrink-0 items-center justify-center rounded-full border text-xs ${picked ? 'border-foreground bg-foreground text-background' : canPick ? 'border-muted-foreground/40' : 'border-transparent'}`}>
-                    {picked ? '✓' : ''}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-baseline gap-2">
-                      <span className="font-semibold">{ticker(h.symbol)}</span>
-                      <span className="truncate text-sm text-muted-foreground">{h.name}</span>
-                    </span>
-                    <span className="text-sm text-muted-foreground">
-                      {h.quantity} shares · {money(h.marketValue)}
-                    </span>
-                  </span>
-                </button>
-                <span className="text-right text-sm">
-                  {cover ? <CoverLine item={cover} /> : planned ? <PlanLine plan={planned} /> : <span className="text-muted-foreground">Not covered</span>}
+      <main>
+        <section className="pt-10 pb-20 sm:pt-16">
+          <h1 className="max-w-[15ch] font-heading text-[clamp(2.9rem,8.4vw,6.5rem)] leading-[0.98] font-medium tracking-[-0.025em]">The market closes. Your stock keeps moving.</h1>
+          <div className="mt-8 grid items-end gap-x-14 gap-y-8 lg:grid-cols-[minmax(0,1fr)_auto]">
+            <p className="max-w-[54ch] text-[1.15rem] leading-[1.6] text-ink-soft">
+              Tokenized stocks trade around the clock, but the exchange they follow shuts every evening and all weekend. ProX hedges your position for exactly those hours, then removes the hedge once the market is open and prices agree.
+            </p>
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+              <Button nativeButton={false} render={<Link href="/app" />} size="lg" className="px-7">
+                Open the app
+              </Button>
+              <a href="#how" className="font-bold text-ink">
+                See how it works
+              </a>
+            </div>
+          </div>
+          <div className="mt-14">
+            <GapChart />
+          </div>
+          <div className="mt-8">
+            <LiveSession />
+          </div>
+        </section>
+
+        <section className="border-t border-line py-20">
+          <h2 className="max-w-[20ch] font-heading text-[clamp(2rem,5vw,3.4rem)] leading-[1.04] font-semibold tracking-[-0.02em]">Two positions that cancel out</h2>
+          <p className="mt-5 mb-12 max-w-[58ch] text-[1.05rem] leading-[1.6] text-ink-soft">
+            A short gains what the stock loses. Hold both in the same size and a move in the price leaves you where you started. Try a few.
+          </p>
+          <TryIt />
+        </section>
+
+        <section id="how" className="scroll-mt-8 border-t border-line py-20">
+          <h2 className="font-heading text-[clamp(2rem,5vw,3.4rem)] leading-[1.04] font-semibold tracking-[-0.02em]">How it works</h2>
+          <ol className="mt-12 grid gap-x-12 gap-y-12 md:grid-cols-3">
+            {STEPS.map((step, i) => (
+              <li key={step.title}>
+                <span className="font-heading text-[4.5rem] leading-none font-medium text-gold" aria-hidden>
+                  {i + 1}
                 </span>
+                <h3 className="mt-4 font-heading text-[1.6rem] leading-tight font-semibold tracking-[-0.3px]">{step.title}</h3>
+                <p className="mt-3 leading-[1.65] text-ink-soft">{step.body}</p>
               </li>
-            )
-          })}
-        </ul>
-      </section>
+            ))}
+          </ol>
+        </section>
 
-      <ProtectBar selected={chosen} />
+        <section className="border-t border-line py-20">
+          <div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+            <div>
+              <h2 className="font-heading text-[clamp(2rem,5vw,3.4rem)] leading-[1.04] font-semibold tracking-[-0.02em]">What keeps it safe</h2>
+              <p className="mt-5 max-w-[40ch] text-[1.05rem] leading-[1.6] text-ink-soft">A hedge is a real position on a real exchange. These are the limits ProX works inside.</p>
+            </div>
+            <dl className="grid gap-x-12 sm:grid-cols-2">
+              {SAFEGUARDS.map((item) => (
+                <div key={item.title} className="border-t border-line py-6">
+                  <dt className="text-[1.05rem] font-bold">{item.title}</dt>
+                  <dd className="mt-2 leading-[1.65] text-ink-soft">{item.body}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </section>
 
-      <section className="flex flex-col gap-3">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-lg font-semibold">Activity</h2>
-          <Link href="/activity" className="text-sm text-muted-foreground hover:underline">
-            See all
-          </Link>
-        </div>
-        <ActivityList policies={(policies.data ?? []).slice(0, 4)} plans={activePlans.slice(0, 2)} />
-      </section>
+        <section className="border-t border-line py-24 text-center">
+          <h2 className="mx-auto max-w-[18ch] font-heading text-[clamp(2.2rem,6vw,4rem)] leading-[1.02] font-medium tracking-[-0.02em]">Keep the stock. Sit out the gap.</h2>
+          <Button nativeButton={false} render={<Link href="/app" />} size="lg" className="mt-9 px-8">
+            Open the app
+          </Button>
+        </section>
+      </main>
+
+      <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-line py-8 text-sm text-ink-faint">
+        <span>ProX. Built on Backpack, Solana and Chainlink CRE.</span>
+        <span>A hedge has costs and can be liquidated. This is not investment advice.</span>
+      </footer>
     </div>
-  )
-}
-
-function Big({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: 'good' }) {
-  return (
-    <div>
-      <p className="text-sm text-muted-foreground">{label}</p>
-      <p className={`mt-1 text-3xl font-semibold tabular-nums ${tone === 'good' ? 'text-emerald-700 dark:text-emerald-300' : ''}`}>{value}</p>
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  )
-}
-
-function CoverLine({ item }: { item: PolicyWithLeg }) {
-  const s = plainStatus(item.policy.status)
-  return (
-    <Link href={`/protection/${item.policy.id}`} className="flex flex-col items-end gap-1">
-      <span className={`rounded-full px-2 py-0.5 text-xs ${TONE_CLASS[s.tone]}`}>{s.text}</span>
-      <span className="text-xs text-muted-foreground">until {etAndLocal(item.policy.reopenAt)}</span>
-    </Link>
-  )
-}
-
-function PlanLine({ plan }: { plan: Plan }) {
-  const when = WHEN_OPTIONS.find((w) => w.kind === plan.windowKind)?.label ?? plan.windowKind
-  return (
-    <Link href={`/plans/${plan.id}`} className="flex flex-col items-end gap-1">
-      <span className={`rounded-full px-2 py-0.5 text-xs ${TONE_CLASS.neutral}`}>Scheduled</span>
-      <span className="text-xs text-muted-foreground">
-        {when.toLowerCase()}, {plan.days === 1 ? 'once' : `${plan.days} days`}
-      </span>
-    </Link>
-  )
-}
-
-function ProtectBar({ selected }: { selected: string[] }) {
-  const href = selected.length ? `/protect?symbols=${encodeURIComponent(selected.join(','))}` : '/protect'
-  return (
-    <div className="sticky bottom-4 z-10 flex items-center justify-between gap-4 rounded-2xl border bg-background/95 p-4 shadow-lg backdrop-blur">
-      <div className="text-sm">
-        {selected.length ? (
-          <>
-            <span className="font-medium">{selected.map(ticker).join(', ')}</span>
-            <span className="text-muted-foreground"> selected</span>
-          </>
-        ) : (
-          <span className="text-muted-foreground">Choose stocks above, or protect everything</span>
-        )}
-      </div>
-      <Button size="lg" nativeButton={false} render={<Link href={href} />}>
-        {selected.length ? `Protect ${selected.length === 1 ? ticker(selected[0]!) : `${selected.length} stocks`}` : 'Protect'}
-      </Button>
-    </div>
-  )
-}
-
-function ActivityList({ policies, plans }: { policies: PolicyWithLeg[]; plans: Plan[] }) {
-  if (!policies.length && !plans.length) return <p className="text-sm text-muted-foreground">Nothing yet. Your first protection will show up here.</p>
-  return (
-    <ul className="divide-y rounded-xl border text-sm">
-      {plans.map((p) => (
-        <li key={p.id}>
-          <Link href={`/plans/${p.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/60">
-            <span className="font-medium">{p.stockSymbols.map(ticker).join(', ')}</span>
-            <span className="text-muted-foreground">
-              {WHEN_OPTIONS.find((w) => w.kind === p.windowKind)?.label.toLowerCase()}, {p.days === 1 ? 'once' : `${p.days} days`}
-            </span>
-            <span className={`ml-auto rounded-full px-2 py-0.5 text-xs ${TONE_CLASS.neutral}`}>Scheduled</span>
-          </Link>
-        </li>
-      ))}
-      {policies.map(({ policy, leg }) => {
-        const s = plainStatus(policy.status)
-        return (
-          <li key={policy.id}>
-            <Link href={policy.status === 'CLOSED' ? `/protection/${policy.id}/receipt` : `/protection/${policy.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/60">
-              <span className="font-medium">{ticker(leg.stockSymbol)}</span>
-              <span className="text-muted-foreground">{etAndLocal(policy.startAt, true)}</span>
-              <span className={`ml-auto rounded-full px-2 py-0.5 text-xs ${TONE_CLASS[s.tone]}`}>{s.text}</span>
-            </Link>
-          </li>
-        )
-      })}
-    </ul>
   )
 }

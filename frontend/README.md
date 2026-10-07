@@ -1,36 +1,81 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ProX frontend
 
-## Getting Started
+The web app for ProX: sign in with a wallet, see the Backpack portfolio, protect a stock, watch a live protection and read its receipt. Next.js 16 with React 19, TanStack Query, shadcn components on Base UI, Sonner, lightweight-charts, loading-dev and the Solana wallet adapter.
 
-First, run the development server:
+Next.js 16 has breaking changes from earlier versions. `AGENTS.md` in this folder says where its bundled docs are; read them before changing framework code.
+
+## Getting started
+
+The backend must be running first; see the README one folder up.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm dev                 # http://localhost:3000, expects the backend on :4000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+To use other ports, or to run without pnpm:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:4100 npx next dev -p 3200
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+`NEXT_PUBLIC_API_URL` is the only setting; `.env.example` lists it. The backend's `FRONTEND_ORIGIN` has to match the address this app is served from, or the browser blocks the calls.
 
-## Learn More
+## Pages
 
-To learn more about Next.js, take a look at the following resources:
+| Route | File | What it shows |
+|---|---|---|
+| `/` | `app/page.tsx` | The public landing page: the idea as a chart, a worked example, how it works, the safeguards |
+| `/app` | `app/app/page.tsx` | Portfolio value, how much is hedged, the stocks, the market session and margin |
+| `/app/protect` | `app/app/protect/page.tsx` | Three steps (stock, how much, how long) and a live summary with the Protect button |
+| `/app/protection/[id]` | `app/app/protection/[id]/page.tsx` | A live protection: the result, its stage, the chart, margin, and the record |
+| `/app/protection/[id]/receipt` | `app/app/protection/[id]/receipt/page.tsx` | The finished protection: result, statement, proof |
+| `/app/advanced` | `app/app/advanced/page.tsx` | The Backpack account as tables, backend and oracle state, raw JSON on request |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`app/layout.tsx` wraps everything in the providers. `app/app/layout.tsx` adds `components/app-shell.tsx` (brand, section tabs, market session, wallet, sign out) and `components/sign-in-gate.tsx`, so only `/app` needs a wallet. The old paths (`/protect`, `/advanced`, `/protection/...`) redirect, set in `next.config.ts`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Pieces worth knowing:
 
-## Deploy on Vercel
+| Component | Purpose |
+|---|---|
+| `components/session-card.tsx` | The US market session and the time until it opens |
+| `components/coverage-bar.tsx` | Hedged against exposed |
+| `components/margin-meter.tsx` | Maintenance margin against the liquidation line |
+| `components/window-track.tsx` | A protection window on a line: now, window end, latest close |
+| `components/scenario-table.tsx` | What a price move does with and without the hedge |
+| `components/result-equation.tsx` | Stock plus hedge minus costs equals net |
+| `components/landing/*` | The hero chart, the worked example and the live session line |
+| `lib/hedge.ts` | The sums those share: the outcome of a move, shorts already on Backpack, time until |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Data
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `lib/api.ts` is the only place that calls the backend. Cookies carry the session, so every call sends credentials.
+- Response types are imported from the backend source (`../backend/src/...`) and passed through `Wire<T>`, which turns every `Date` into the ISO string JSON delivers. Rename a field in the backend and the typecheck here fails. Three shapes are still written by hand because the routes build them inline: `Health`, `MarketRow` and `PolicyHealth`.
+- `hooks/use-stream.ts` listens to `GET /api/stream` (server-sent events) for PnL, basis, account health and policy changes, and refreshes the affected queries.
+- Nothing is mocked. With no backend the app shows "Backend unreachable".
+
+## Design
+
+The look comes from the Umbra wallet (`adilhusain01/umbra`, files `web/src/theme.css` and `web/src/style.css`, unchanged from the original author's last commit).
+
+- **Tokens** are in `app/globals.css`: paper (`--paper`, `--paper-2`, `--paper-3`), ink (`--ink`, `--ink-soft`, `--ink-faint`), hairlines (`--line`, `--line-soft`), one accent (`--gold`, `--gold-deep`, `--gold-wash`) and `--danger`. Tailwind classes exist for each: `bg-paper-2`, `text-ink-soft`, `border-line`, `text-gold-deep`.
+- Umbra calls its gold `--accent`. Here it is `--gold`, because shadcn already uses `--accent` for hover surfaces. shadcn's own names (`--background`, `--card`, `--primary` and the rest) point at the Umbra palette.
+- **Type** is loaded in `app/layout.tsx`: Bodoni Moda for display (`font-heading`), Mulish for the interface (`font-sans`), Geist Mono for figures (`font-mono`).
+- **Shapes**: radii of 6, 10 and 16 pixels; surfaces are outlined with an inset 1.5 pixel line instead of a border or shadow; chips, tabs and round marks are pills; section labels are small, uppercase and letterspaced.
+- **Gold is rare.** It marks a portfolio with a live hedge, the net result of a protection, and links. Risk climbs from ink through gold to the oxblood red.
+- **Shared pieces** are in `components/umbra.tsx`: `SectionLabel`, `StatTile` and `LineRow`. The restyled primitives are in `components/ui`.
+- **Loading** is always `components/loader.tsx`, the Gather spinner from `loading-dev` with an optional caption. Use `<Loader label="..." />` for a page and `<Loader compact />` inside a card. Do not use skeleton boxes.
+- There is one theme. Umbra has no dark mode, so neither does this.
+- **Layout**: up to 1240 pixels wide. Sections are separated by space and hairlines; a filled surface is kept for the one thing on a page that needs to stand apart, such as the Protect summary.
+- **Motion**: pressable things scale to 0.97. Transitions list the properties they change and use `ease-out-strong`. The only entrance animation is the hero chart drawing once.
+- **Words**: say what happens in plain terms. A button names its action ("Protect $2.40 of NVDA"), and an empty or failed state says what to do next.
+
+Take colours, radii and type from these tokens. Do not add new hex values in components.
+
+## Checks
+
+```bash
+npx tsc --noEmit
+npx eslint app components hooks lib
+```
+
+After changing `app/globals.css`, restart `next dev` if the page keeps the old colours.

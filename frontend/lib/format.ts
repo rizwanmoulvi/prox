@@ -7,7 +7,9 @@ export function money(value: string | number | null | undefined, fine = false): 
   if (value === null || value === undefined || value === '') return '—'
   const n = Number(value)
   if (!Number.isFinite(n)) return '—'
-  return (fine ? usdFine : usd).format(n)
+  // A hedge that offsets the stock leaves a remainder like -0.0001; show that as $0.00, not -$0.00.
+  const shown = (fine ? usdFine : usd).format(n)
+  return /^-\$0\.0+$/.test(shown) ? shown.slice(1) : shown
 }
 
 /** Signed money for PnL: +$1.20 / -$0.35 */
@@ -15,7 +17,8 @@ export function signedMoney(value: string | number | null | undefined): string {
   if (value === null || value === undefined) return '—'
   const n = Number(value)
   if (!Number.isFinite(n)) return '—'
-  const text = money(Math.abs(n), Math.abs(n) < 1)
+  // Four decimals only when two would round a real amount down to nothing.
+  const text = money(Math.abs(n), Math.abs(n) > 0 && Math.abs(n) < 0.01)
   return n > 0 ? `+${text}` : n < 0 ? `-${text}` : text
 }
 
@@ -43,6 +46,12 @@ export function quantity(value: string | null | undefined, symbol?: string): str
 export function when(iso: string | null | undefined): string {
   if (!iso) return '—'
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+/** A date without the year, for places where the year is obvious: "Oct 7, 7:00 PM". */
+export function whenShort(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
 export function duration(seconds: number): string {
@@ -78,26 +87,4 @@ export const SESSION_LABEL: Record<string, string> = {
   OVERNIGHT: 'Overnight',
   WEEKEND: 'Weekend',
   HOLIDAY: 'Holiday',
-}
-
-export const WINDOW_LABEL: Record<string, string> = {
-  PRE_MARKET: 'Pre-market',
-  POST_MARKET: 'After hours',
-  OVERNIGHT: 'Overnight',
-  CUSTOM: 'Custom',
-}
-
-export const PLAN_RUN_LABEL: Record<string, string> = {
-  SCHEDULED: 'Scheduled',
-  SKIPPED: 'Skipped',
-  OPENING: 'Opening',
-  OPEN: 'Protecting',
-  DONE: 'Done',
-  FAILED: 'Failed',
-}
-
-/** A time in US Eastern, the clock Backpack's sessions use. */
-export function easternTime(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + ' ET'
 }

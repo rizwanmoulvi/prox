@@ -2,7 +2,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/ca
 
 export function ErrorCard({ title, message }: { title: string; message: string }) {
   return (
-    <Card className="border-destructive/40">
+    <Card className="shadow-[inset_0_0_0_1.5px_var(--danger)]">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         <CardDescription>{message}</CardDescription>

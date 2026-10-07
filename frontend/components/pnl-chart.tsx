@@ -13,20 +13,19 @@ export function PnlChart({ points }: { points: PnlPoint[] }) {
 
   useEffect(() => {
     if (!container.current) return
-    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
     const created = createChart(container.current, {
       height: 260,
-      layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: dark ? '#a3a3a3' : '#525252', attributionLogo: false },
-      grid: { vertLines: { visible: false }, horzLines: { color: dark ? '#262626' : '#e5e5e5' } },
+      layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: '#4a4537', fontFamily: 'Mulish, sans-serif', attributionLogo: false },
+      grid: { vertLines: { visible: false }, horzLines: { color: '#ddd4bd' } },
       rightPriceScale: { borderVisible: false },
       timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
       handleScroll: false,
       handleScale: false,
     })
     series.current = {
-      underlying: created.addSeries(LineSeries, { color: '#737373', lineWidth: 2, title: 'Underlying' }),
-      hedge: created.addSeries(LineSeries, { color: '#2563eb', lineWidth: 2, title: 'Hedge' }),
-      net: created.addSeries(LineSeries, { color: '#16a34a', lineWidth: 3, title: 'Net' }),
+      underlying: created.addSeries(LineSeries, { color: '#8d8670', lineWidth: 2, title: 'Underlying' }),
+      hedge: created.addSeries(LineSeries, { color: '#1c1a14', lineWidth: 2, title: 'Hedge' }),
+      net: created.addSeries(LineSeries, { color: '#a87e36', lineWidth: 3, title: 'Net' }),
     }
     chart.current = created
     const resize = () => created.applyOptions({ width: container.current?.clientWidth ?? 600 })
