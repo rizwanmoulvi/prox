@@ -23,6 +23,7 @@ const PreviewBody = z.object({
   mode: z.enum(['TONIGHT', 'WEEKEND', 'CUSTOM']),
   customEndAt: z.string().datetime().optional(),
 })
+const GroupBody = PreviewBody.omit({ stockSymbol: true }).extend({ stockSymbols: z.array(z.string().min(1)).min(1).max(200) })
 const ReportBody = z.object({ report: z.string().min(1), context: z.string().min(1), signatures: z.array(z.string()) })
 const PolicyParams = z.object({ id: z.string().uuid() })
 const PlanBody = z.object({
@@ -118,6 +119,19 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     const body = PreviewBody.parse(request.body)
     const created = await protection.activate(body, request.wallet!)
     return reply.code(201).send(created)
+  })
+
+  /** Several stocks at once: they must fit side by side under one leverage. */
+  app.post('/api/protection/group/preview', operator, async (request) => {
+    const body = GroupBody.parse(request.body)
+    return preview.previewGroup(body.stockSymbols, body.protectionBps)
+  })
+
+  // ponytail: opens the stocks one after another inside the request; move to a background job if groups reach dozens.
+  app.post('/api/protection/group', operator, async (request, reply) => {
+    const { stockSymbols, ...rest } = GroupBody.parse(request.body)
+    const results = await protection.activateMany(stockSymbols.map((stockSymbol) => ({ ...rest, stockSymbol })), request.wallet!)
+    return reply.code(201).send(results)
   })
 
   app.get('/api/protection', operator, async () => ctx.policies.list())

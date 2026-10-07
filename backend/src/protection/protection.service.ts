@@ -22,6 +22,8 @@ export class ActivationBlocked extends Error {
 // How many IOC attempts one close may take before the reconciler takes over.
 const CLOSE_ATTEMPTS = 3
 
+export type StockResult = { policyId?: string; error?: string }
+
 export class ProtectionService {
   constructor(
     private readonly ctx: Context,
@@ -76,6 +78,33 @@ export class ProtectionService {
     const result = await this.executor.openShort(id, perp, orderQuantity, 1)
     await this.applyOpenResult((await this.ctx.policies.get(id))!, result)
     return (await this.ctx.policies.get(id))!
+  }
+
+  /**
+   * Opens several stocks in one go. Their shorts share the account's margin, so the whole group
+   * opens at one leverage, the lowest that covers all of them. If none does, nothing opens.
+   */
+  async activateMany(requests: PreviewRequest[], ownerWallet: string, planRunId: string | null = null): Promise<Record<string, StockResult>> {
+    const results: Record<string, StockResult> = {}
+    let leverageFloor: number | undefined
+    if (requests.length > 1) {
+      try {
+        leverageFloor = await this.groupLeverage(requests)
+      } catch (error) {
+        for (const r of requests) results[r.stockSymbol] = { error: (error as Error).message }
+        return results
+      }
+    }
+    for (const request of requests) {
+      try {
+        const created = await this.activate({ ...request, leverageFloor }, ownerWallet, planRunId)
+        results[request.stockSymbol] = created.policy.status === 'FAILED' ? { policyId: created.policy.id, error: created.policy.failureReason ?? 'did not fill' } : { policyId: created.policy.id }
+      } catch (error) {
+        results[request.stockSymbol] = { error: (error as Error).message }
+      }
+      this.ctx.log.info({ planRunId, stockSymbol: request.stockSymbol, leverageFloor, result: results[request.stockSymbol] }, 'group activation')
+    }
+    return results
   }
 
   /** Reduce-only close of what this policy opened. Safe to call again while CLOSING. */
@@ -252,6 +281,22 @@ export class ProtectionService {
     }
     this.ctx.events.publish('policy.closed', { policyId: policy.id })
     void this.ctx.anchor?.anchor(policy.id, 'RECEIPT', receipt)
+  }
+
+  /**
+   * The leverage a group opens at. The account limit is raised to it first, so every stock's
+   * order limit is read at that leverage. Throws when no allowed leverage covers the group.
+   */
+  private async groupLeverage(requests: PreviewRequest[]): Promise<number | undefined> {
+    const group = await this.preview.previewGroup(requests.map((r) => r.stockSymbol), requests[0]!.protectionBps)
+    if (group.blockers.length) throw new ActivationBlocked(group.blockers)
+    if (group.leverage === null) return undefined
+    const account = await this.ctx.backpack.account.get()
+    if (new Decimal(account.leverageLimit).lt(group.leverage)) {
+      await this.ctx.backpack.account.setLeverageLimit(String(group.leverage))
+      this.ctx.log.info({ from: account.leverageLimit, to: group.leverage }, 'account leverage raised for a group')
+    }
+    return group.leverage
   }
 
   /** PRD section 12: raise the account limit when the chosen leverage needs it. Never lower it. */

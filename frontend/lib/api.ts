@@ -45,7 +45,8 @@ import type { ProtectionMode } from '../../backend/src/db/types'
 import type * as Db from '../../backend/src/db/types'
 import type { RiskState } from '../../backend/src/risk/risk-rules'
 import type { Receipt } from '../../backend/src/protection/receipt'
-import type { ProtectionPreview } from '../../backend/src/protection/protection.preview'
+import type { GroupPreview as BackendGroupPreview, ProtectionPreview } from '../../backend/src/protection/protection.preview'
+import type { StockResult } from '../../backend/src/protection/protection.service'
 import type { AccountHealth as BackendAccountHealth, Portfolio as BackendPortfolio, StockHolding } from '../../backend/src/portfolio/portfolio.service'
 import type { SessionSnapshot as BackendSessionSnapshot } from '../../backend/src/market/market-session.service'
 import type { PlanPreview as BackendPlanPreview, PlanRequest as BackendPlanRequest } from '../../backend/src/plans/plan.service'
@@ -55,6 +56,7 @@ export type AccountHealth = Wire<BackendAccountHealth>
 export type Holding = Wire<StockHolding>
 export type Portfolio = Wire<BackendPortfolio>
 export type Preview = Wire<ProtectionPreview>
+export type GroupPreview = Wire<BackendGroupPreview>
 export type Policy = Omit<Wire<Db.Policy>, 'receipt'> & { receipt: Receipt | null }
 export type Leg = Wire<Db.HedgeLeg>
 export type Anchor = Wire<Db.Anchor>
@@ -132,6 +134,10 @@ export interface ProtectRequest {
   customEndAt?: string
 }
 
+export interface GroupRequest extends Omit<ProtectRequest, 'stockSymbol'> {
+  stockSymbols: string[]
+}
+
 export const api = {
   health: () => get<Health>('/api/health'),
   me: () => get<{ wallet: string | null }>('/api/auth/me'),
@@ -142,6 +148,9 @@ export const api = {
   markets: () => get<MarketRow[]>('/api/protection/markets'),
   preview: (body: ProtectRequest) => post<Preview>('/api/protection/preview', body),
   activate: (body: ProtectRequest) => post<PolicyWithLeg>('/api/protection', body),
+  // Several stocks at once, opened under one leverage that covers them all.
+  groupPreview: (body: GroupRequest) => post<GroupPreview>('/api/protection/group/preview', body),
+  activateGroup: (body: GroupRequest) => post<Record<string, StockResult>>('/api/protection/group', body),
   policies: () => get<PolicyWithLeg[]>('/api/protection'),
   policy: (id: string) => get<PolicyDetail>(`/api/protection/${id}`),
   policyHealth: (id: string) => get<PolicyHealth>(`/api/protection/${id}/health`),

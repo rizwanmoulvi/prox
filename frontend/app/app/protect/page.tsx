@@ -15,7 +15,7 @@ import { ScenarioTable } from '@/components/scenario-table'
 import { Button } from '@/components/ui/button'
 import { LineRow } from '@/components/umbra'
 import { WindowTrack } from '@/components/window-track'
-import { api, ApiError, type MarketRow, type PlanPreview, type PlanRequest, type Preview } from '@/lib/api'
+import { api, ApiError, type GroupPreview, type MarketRow, type PlanPreview, type PlanRequest, type Preview } from '@/lib/api'
 import { bpsPercent, clock, dateOnly, dayLabel, localToNy, money, myZone, nyTime, nyWallClock, percent, zoneLabel } from '@/lib/format'
 
 const PRESETS = [2500, 5000, 7500, 10_000]
@@ -102,21 +102,23 @@ function ProtectForm() {
     retry: false,
     placeholderData: (previous) => previous,
   })
+  // Stocks hedged together share the account's margin, so the backend checks them as one group.
+  const group = useQuery({
+    queryKey: ['group-preview', selected, bps],
+    queryFn: () => api.groupPreview({ stockSymbols: selected, protectionBps: bps, mode: 'WEEKEND' }),
+    enabled: when === 'WEEKEND' && selected.length > 1,
+    refetchInterval: 15_000,
+    retry: false,
+    placeholderData: (previous) => previous,
+  })
 
   const protect = useMutation({
     mutationFn: async () => {
       if (when !== 'WEEKEND') return { planId: (await api.createPlan(planRequest!)).plan.id }
-      const results = await Promise.all(
-        selected.map((symbol) =>
-          api
-            .activate({ stockSymbol: symbol, protectionBps: bps, mode: 'WEEKEND' })
-            .then((created) => ({ symbol, id: created.policy.id, failed: created.policy.status === 'FAILED' }))
-            .catch((error: Error) => ({ symbol, id: null, failed: true, error })),
-        ),
-      )
-      const failed = results.filter((r) => r.failed)
-      if (failed.length) toast.error(`${failed.map((f) => ticker(f.symbol)).join(', ')} could not be hedged`)
-      return { policyIds: results.filter((r) => r.id && !r.failed).map((r) => r.id!) }
+      const results = Object.entries(await api.activateGroup({ stockSymbols: selected, protectionBps: bps, mode: 'WEEKEND' }))
+      const failed = results.filter(([, r]) => r.error)
+      if (failed.length) toast.error(`${failed.map(([symbol]) => ticker(symbol)).join(', ')} could not be hedged: ${failed[0]![1].error}`)
+      return { policyIds: results.filter(([, r]) => r.policyId && !r.error).map(([, r]) => r.policyId!) }
     },
     onSuccess: (result) => {
       if ('planId' in result) {
@@ -235,7 +237,9 @@ function ProtectForm() {
           rows={rows}
           selected={selected}
           previews={weekend.data}
-          fetching={weekend.isFetching}
+          group={selected.length > 1 ? group.data : null}
+          groupError={selected.length > 1 && group.error instanceof ApiError ? group.error : null}
+          fetching={weekend.isFetching || group.isFetching}
           onProtect={() => protect.mutate()}
           protecting={protect.isPending}
         />
@@ -407,6 +411,7 @@ function PlanSummary({
           {preview.stocks.map((s) => (
             <LineRow key={s.symbol} label={ticker(s.symbol)} sub={s.issues.join(', ') || undefined} value={`${money(s.notional)} on ${s.quantity} shares`} />
           ))}
+          {preview.leverage !== null && <LineRow label="Leverage" value={`${preview.leverage}x for every stock`} sub="From today's margin, checked again as each window opens" />}
         </div>
       </details>
 
@@ -434,6 +439,8 @@ function WeekendSummary({
   rows,
   selected,
   previews,
+  group,
+  groupError,
   fetching,
   onProtect,
   protecting,
@@ -441,15 +448,22 @@ function WeekendSummary({
   rows: MarketRow[]
   selected: string[]
   previews: WeekendPreview[] | undefined
+  /** Null for a single stock; undefined while the group check loads. */
+  group: GroupPreview | null | undefined
+  groupError: ApiError | null
   fetching: boolean
   onProtect: () => void
   protecting: boolean
 }) {
   if (!selected.length) return <aside className={FRAME}><p className="leading-relaxed text-ink-soft">Pick at least one stock to see what the protection would do.</p></aside>
-  if (!previews) return <aside className={FRAME}><Loader compact label="Reading the account and the order book" /></aside>
+  if (groupError) return <Blocked title="These cannot be hedged together" reasons={groupError.blockers.length ? groupError.blockers : [groupError.message]} />
+  if (!previews || group === undefined) return <aside className={FRAME}><Loader compact label="Reading the account and the order book" /></aside>
 
   const ok = previews.filter((p): p is { symbol: string; preview: Preview } => 'preview' in p)
-  const reasons = previews.flatMap((p) => ('error' in p ? [`${ticker(p.symbol)}: ${p.error.blockers.join(', ') || p.error.message}`] : p.preview.blockers.map((b) => `${ticker(p.symbol)}: ${b}`)))
+  const reasons = [
+    ...previews.flatMap((p) => ('error' in p ? [`${ticker(p.symbol)}: ${p.error.blockers.join(', ') || p.error.message}`] : p.preview.blockers.map((b) => `${ticker(p.symbol)}: ${b}`))),
+    ...(group?.blockers ?? []),
+  ]
   const stockValue = rows.filter((r) => selected.includes(r.symbol)).reduce((sum, r) => sum + Number(r.marketValue), 0)
   const protectedValue = ok.reduce((sum, p) => sum + Number(p.preview.targetNotional), 0)
   const first = ok[0]?.preview
@@ -501,6 +515,25 @@ function WeekendSummary({
             <LineRow label="Margin used after" value={percent(single.projectedMmr)} />
             <LineRow label="Free margin now" value={money(single.account.netEquityAvailable)} />
             <LineRow label="Counts as collateral" value={money(single.collateralValue)} />
+          </div>
+        </details>
+      )}
+
+      {group && group.leverage !== null && (
+        <details className="group mt-5 border-t border-line pt-4">
+          <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-bold text-ink-soft [&::-webkit-details-marker]:hidden">
+            How the hedges are built
+            <span className="font-mono text-ink-faint transition-transform duration-150 ease-out-strong group-open:rotate-45" aria-hidden>
+              +
+            </span>
+          </summary>
+          <div className="mt-2">
+            {ok.map((p) => (
+              <LineRow key={p.symbol} label={ticker(p.symbol)} value={`Short ${p.preview.orderQuantity} ${perpName(p.preview.perpSymbol)} perp`} />
+            ))}
+            <LineRow label="Leverage" value={`${group.leverage}x for every stock`} sub="They share one account, so they must fit side by side" />
+            <LineRow label="Margin used after" value={percent(group.projectedMmr)} />
+            <LineRow label="Free margin now" value={money(group.freeMargin)} />
           </div>
         </details>
       )}

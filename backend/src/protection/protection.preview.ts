@@ -8,7 +8,7 @@ import { HEDGED_STATUSES, type CloseRule, type ProtectionMode } from '../db/type
 import type { LivePrices } from '../market/live-prices'
 import type { MarketSessionService, SessionSnapshot } from '../market/market-session.service'
 import type { Portfolio, PortfolioService, StockHolding } from '../portfolio/portfolio.service'
-import { selectLeverage, type LeverageChoice } from '../risk/leverage-selector'
+import { selectGroupLeverage, selectLeverage, type LeverageChoice, type LeverageLeg } from '../risk/leverage-selector'
 import type { RiskState } from '../risk/risk-rules'
 import { capToOrderLimit, ceilToStep, floorToStep, protectionBps, sizeHedge, type HedgeSizing } from './protection.math'
 
@@ -20,6 +20,19 @@ export interface PreviewRequest {
   /** WINDOW mode only: when the scheduled window ends and how the hedge closes then. */
   windowEndAt?: string
   closeRule?: CloseRule
+  /** Set when this stock opens as part of a group: it is held to the group's leverage. */
+  leverageFloor?: number
+}
+
+export interface GroupPreview {
+  stockSymbols: string[]
+  /** One leverage for every short in the group, or null when none covers them all. */
+  leverage: number | null
+  totalNotional: string
+  initialMargin: string | null
+  freeMargin: string
+  projectedMmr: string | null
+  blockers: string[]
 }
 
 export interface ProtectionPreview {
@@ -116,7 +129,7 @@ export class PreviewService {
     }
     this.checkNotionalCaps(sizing, live, blockers)
 
-    const leverage = sizing.additionalQuantity.gt(0) ? this.chooseLeverage(sizing, portfolio, perp, blockers) : null
+    const leverage = sizing.additionalQuantity.gt(0) ? this.chooseLeverage(sizing, portfolio, perp, blockers, request.leverageFloor) : null
     const { reopenAt, maxEndAt, cooldownSec } = await this.window(request, now)
 
     return {
@@ -171,7 +184,7 @@ export class PreviewService {
     }
   }
 
-  private chooseLeverage(sizing: HedgeSizing, portfolio: Portfolio, perp: Market, blockers: string[]): LeverageChoice | null {
+  private chooseLeverage(sizing: HedgeSizing, portfolio: Portfolio, perp: Market, blockers: string[], minLeverage?: number): LeverageChoice | null {
     if (!perp.imfFunction || !perp.mmfFunction) {
       blockers.push(`${perp.symbol} publishes no margin curve`)
       return null
@@ -187,6 +200,7 @@ export class PreviewService {
       maxApplicationLeverage: this.config.MAX_APPLICATION_LEVERAGE,
       marginBuffer: this.config.MARGIN_BUFFER,
       thresholds: riskThresholds(this.config),
+      minLeverage,
     })
     if (!choice) {
       blockers.push(
@@ -194,6 +208,57 @@ export class PreviewService {
       )
     }
     return choice
+  }
+
+  /**
+   * Several stocks hedged in one go share the account's margin, so they must fit side by side
+   * under one leverage. Stocks that cannot be hedged at all are reported by their own preview.
+   */
+  async previewGroup(stockSymbols: string[], protectionBps: number): Promise<GroupPreview> {
+    const [portfolio, markets, positions] = await Promise.all([this.portfolioService.get(), this.backpack.markets.list(), this.backpack.positions.list()])
+    const legs: LeverageLeg[] = []
+    for (const symbol of stockSymbols) {
+      const holding = portfolio.holdings.find((h) => h.symbol === symbol)
+      const perp = findPerp(markets, symbol)
+      if (!holding || !perp?.imfFunction || !perp.mmfFunction) continue
+      const quote = await this.prices.perp(perp.symbol)
+      const net = new Decimal(positions.find((p) => p.symbol === perp.symbol)?.netQuantity ?? 0)
+      const sizing = sizeHedge({
+        stockQuantity: holding.quantity,
+        stockMarkPrice: holding.markPrice,
+        perpMarkPrice: quote.markPrice,
+        protectionBps,
+        existingShortQuantity: net.lt(0) ? net.abs() : 0,
+        stepSize: perp.filters.quantity.stepSize,
+        minQuantity: perp.filters.quantity.minQuantity,
+      })
+      if (sizing.additionalQuantity.gt(0)) legs.push({ notional: sizing.additionalNotional, marketImf: perp.imfFunction, marketMmf: perp.mmfFunction })
+    }
+    const total = legs.reduce((sum, leg) => sum.plus(leg.notional), new Decimal(0))
+    const free = portfolio.health.netEquityAvailable
+    const base = { stockSymbols, totalNotional: total.toString(), freeMargin: free }
+    if (!legs.length) return { ...base, leverage: null, initialMargin: null, projectedMmr: null, blockers: [] }
+
+    const choice = selectGroupLeverage({
+      legs,
+      netEquity: portfolio.health.netEquity,
+      netEquityAvailable: free,
+      currentMaintenanceMargin: portfolio.health.maintenanceMargin,
+      takerFeeRate: portfolio.health.futuresTakerFeeRate,
+      maxApplicationLeverage: this.config.MAX_APPLICATION_LEVERAGE,
+      marginBuffer: this.config.MARGIN_BUFFER,
+      thresholds: riskThresholds(this.config),
+    })
+    const max = this.config.MAX_APPLICATION_LEVERAGE
+    const needed = total.div(max).mul(1 + this.config.MARGIN_BUFFER)
+    const blockers = choice
+      ? []
+      : [
+          needed.gt(free)
+            ? `Not enough free margin to hedge these ${legs.length} stocks together: about $${needed.toFixed(2)} needed at ${max}x, $${new Decimal(free).toFixed(2)} free. Add USDC or choose fewer stocks.`
+            : `Hedging these ${legs.length} stocks together would leave the account outside the safe margin band. Choose fewer stocks or a lower level.`,
+        ]
+    return { ...base, leverage: choice?.leverage ?? null, initialMargin: choice?.initialMargin.toString() ?? null, projectedMmr: choice?.projectedMmr.toString() ?? null, blockers }
   }
 
   private async window(request: PreviewRequest, now: number) {

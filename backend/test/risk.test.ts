@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evalMarginFunction, evaluateLeverages, selectLeverage, type LeverageInput } from '../src/risk/leverage-selector'
+import { evalMarginFunction, evaluateLeverages, selectGroupLeverage, selectLeverage, type LeverageInput } from '../src/risk/leverage-selector'
 import { marginRates, riskStateFor } from '../src/risk/risk-rules'
 
 // PRD section 45 defaults.
@@ -104,5 +104,39 @@ describe('evalMarginFunction', () => {
 
   it('refuses a curve type it does not know', () => {
     expect(() => evalMarginFunction({ type: 'linear', base: '0.1', factor: '0' }, '1')).toThrow()
+  })
+})
+
+// The account on 2026-10-07: 0.01 NVDA ($2.3874 to hedge) and 0.01 SPCX ($1.6794), $2.97 free,
+// both perps with NVDA's margin curves.
+describe('selectGroupLeverage', () => {
+  const account = { netEquity: '2.97', netEquityAvailable: '2.97', currentMaintenanceMargin: '0', takerFeeRate: '0.0005', marginBuffer: '0.1', thresholds }
+  const legs = [
+    { notional: '2.3874', ...nvda },
+    { notional: '1.6794', ...nvda },
+  ]
+
+  it('fits each stock alone at 1x but needs 2x for both together', () => {
+    expect(selectLeverage({ ...account, ...legs[0]!, maxApplicationLeverage: 2 })?.leverage).toBe(1)
+    expect(selectLeverage({ ...account, ...legs[1]!, maxApplicationLeverage: 2 })?.leverage).toBe(1)
+    const both = selectGroupLeverage({ ...account, legs, maxApplicationLeverage: 2 })
+    expect(both?.leverage).toBe(2)
+    expect(both?.initialMargin.toString()).toBe('2.0334')
+    expect(both?.projectedRisk).toBe('SAFE')
+  })
+
+  it('refuses the group when even the highest allowed leverage cannot cover it', () => {
+    expect(selectGroupLeverage({ ...account, netEquityAvailable: '2.0', legs, maxApplicationLeverage: 2 })).toBeNull()
+    expect(selectGroupLeverage({ ...account, netEquityAvailable: '2.0', legs, maxApplicationLeverage: 3 })?.leverage).toBe(3)
+  })
+
+  it('holds a single hedge to the leverage its group was given', () => {
+    expect(selectLeverage({ ...account, ...legs[0]!, maxApplicationLeverage: 2, minLeverage: 2 })?.leverage).toBe(2)
+  })
+
+  it('lets the strictest market cap the whole group', () => {
+    const strict = { notional: '1', marketImf: { type: 'sqrt', base: '0.6', factor: '0' }, marketMmf: nvda.marketMmf }
+    const options = selectGroupLeverage({ ...account, netEquityAvailable: '100', netEquity: '100', legs: [legs[0]!, strict], maxApplicationLeverage: 5 })
+    expect(options?.leverage).toBe(1)
   })
 })

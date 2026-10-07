@@ -7,7 +7,7 @@ import { addDays, dateInZone, easternDate, isTimeZone, planWindows, type Planned
 import type { Context } from '../context'
 import type { PlanRepo } from '../db/plans'
 import { HEDGED_STATUSES, TERMINAL_STATUSES, type Plan, type PlanRun, type PolicyWithLeg } from '../db/types'
-import { findPerp } from '../protection/protection.preview'
+import { findPerp, type PreviewService } from '../protection/protection.preview'
 import { sizeHedge } from '../protection/protection.math'
 import type { ProtectionService } from '../protection/protection.service'
 
@@ -25,6 +25,8 @@ export interface PlanPreview {
   runs: (PlannedWindow & { startIso: string | null; endIso: string | null })[]
   stocks: { symbol: string; name: string; quantity: string; notional: string; issues: string[] }[]
   totalNotionalPerRun: string
+  /** The one leverage every stock opens at, from today's margin; null when it cannot be chosen. */
+  leverage: number | null
   canCreate: boolean
   blockers: string[]
 }
@@ -41,6 +43,7 @@ export class PlanService {
     private readonly ctx: Context,
     private readonly plans: PlanRepo,
     private readonly protection: ProtectionService,
+    private readonly previews: PreviewService,
   ) {}
 
   async preview(request: PlanRequest, now = Date.now()): Promise<PlanPreview> {
@@ -73,8 +76,11 @@ export class PlanService {
     const total = stocks.reduce((sum, s) => sum.plus(s.notional), new Decimal(0))
     if (total.gt(this.ctx.config.MAX_TOTAL_NOTIONAL_USD)) blockers.push(`One run would hedge $${total.toFixed(2)}, above MAX_TOTAL_NOTIONAL_USD=${this.ctx.config.MAX_TOTAL_NOTIONAL_USD}`)
     for (const s of stocks) for (const issue of s.issues) blockers.push(`${s.symbol}: ${issue}`)
+    // Margin is read today; each run checks it again when its window opens.
+    const group = request.stockSymbols.length > 1 ? await this.previews.previewGroup(request.stockSymbols, request.protectionBps) : null
+    if (group) blockers.push(...group.blockers)
 
-    return { startDate, runs, stocks, totalNotionalPerRun: total.toString(), canCreate: blockers.length === 0, blockers }
+    return { startDate, runs, stocks, totalNotionalPerRun: total.toString(), leverage: group?.leverage ?? null, canCreate: blockers.length === 0, blockers }
   }
 
   async create(request: PlanRequest, ownerWallet: string): Promise<{ plan: Plan; runs: PlanRun[] }> {
@@ -157,20 +163,11 @@ export class PlanService {
     const found = await this.plans.get(run.planId)
     if (!found) return
     const { plan } = found
-    const results: Record<string, { policyId?: string; error?: string }> = {}
-    for (const stockSymbol of plan.stockSymbols) {
-      try {
-        const created = await this.protection.activate(
-          { stockSymbol, protectionBps: plan.protectionBps, mode: 'WINDOW', windowEndAt: run.windowEnd!.toISOString(), closeRule: run.closeRule },
-          plan.ownerWallet,
-          run.id,
-        )
-        results[stockSymbol] = created.policy.status === 'FAILED' ? { policyId: created.policy.id, error: created.policy.failureReason ?? 'did not fill' } : { policyId: created.policy.id }
-      } catch (error) {
-        results[stockSymbol] = { error: (error as Error).message }
-      }
-      this.ctx.log.info({ planId: plan.id, runId: run.id, stockSymbol, result: results[stockSymbol] }, 'plan run opened stock')
-    }
+    const results = await this.protection.activateMany(
+      plan.stockSymbols.map((stockSymbol) => ({ stockSymbol, protectionBps: plan.protectionBps, mode: 'WINDOW', windowEndAt: run.windowEnd!.toISOString(), closeRule: run.closeRule })),
+      plan.ownerWallet,
+      run.id,
+    )
     const opened = Object.values(results).some((r) => r.policyId && !r.error)
     await this.plans.updateRun(run.id, { status: opened ? 'OPEN' : 'FAILED', results })
     this.ctx.events.publish('plan.updated', { planId: plan.id })

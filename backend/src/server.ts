@@ -72,7 +72,7 @@ const simRunner = new CreSimRunner(ctx, ingest, () => convergence.watchlist())
 const risk = new RiskService(ctx, protection)
 const monitor = new MonitorWorker(ctx, protection, risk)
 const reconcile = new ReconcileWorker(ctx, protection, executor)
-const planService = new PlanService(ctx, ctx.plans, protection)
+const planService = new PlanService(ctx, ctx.plans, protection, preview)
 const schedule = new ScheduleWorker(ctx, planService)
 
 await app.register(cors, { origin: config.FRONTEND_ORIGIN, credentials: true })
